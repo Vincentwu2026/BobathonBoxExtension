@@ -1,11 +1,21 @@
+import type { BoxClient } from 'box-node-sdk';
 import { getBoxClient } from '../box-client.js';
+import { detectFormat, extractPreview, previewToPlainText } from '../preview/index.js';
+import { isActiveCollaboratorStatus } from '../retention/rules.js';
+import { boxDateToIso } from '../util/box-date.js';
 import { withRateLimitRetry } from '../util/rate-limiter.js';
+import { readCapped } from '../util/read-capped.js';
 import { getFileRecord, upsertFileRecord, type IndexedFileRecord } from './schema.js';
+
+/** Largest file the crawler downloads to index its text. Larger files are indexed by metadata only. */
+const MAX_INDEX_DOWNLOAD_BYTES = 5 * 1024 * 1024;
 
 export interface CrawlOptions {
   startFolderId?: string;
   maxDepth?: number;
   forceReindex?: boolean;
+  /** Download supported files (Box Notes, Word, PowerPoint, Excel, text) and index their text. Default true. */
+  indexContent?: boolean;
   onProgress?: (scanned: number, indexed: number, skipped: number) => void;
 }
 
@@ -24,6 +34,10 @@ export class BoxCrawler {
   private indexedFiles = 0;
   private skippedFiles = 0;
   private errors: string[] = [];
+  private indexContent = true;
+
+  /** The client provider is injectable so the crawler can be tested without a Box connection. */
+  constructor(private readonly clientProvider: () => Promise<BoxClient> = getBoxClient) {}
 
   /**
    * Performs recursive traversal of the Box folder tree and updates the SQLite FTS5 index.
@@ -33,6 +47,7 @@ export class BoxCrawler {
     const startFolderId = options.startFolderId || '0';
     const maxDepth = options.maxDepth !== undefined ? options.maxDepth : 15;
     const forceReindex = Boolean(options.forceReindex);
+    this.indexContent = options.indexContent ?? process.env.BOX_INDEX_CONTENT !== 'false';
 
     this.scannedFolders = 0;
     this.indexedFiles = 0;
@@ -41,7 +56,8 @@ export class BoxCrawler {
 
     console.error(`[BoxCrawler] Starting crawl from folder ID: ${startFolderId} (maxDepth: ${maxDepth}, forceReindex: ${forceReindex})`);
 
-    await this.crawlFolder(startFolderId, '/', 0, maxDepth, forceReindex, options.onProgress);
+    const basePath = await this.resolveBasePath(startFolderId);
+    await this.crawlFolder(startFolderId, basePath, 0, maxDepth, forceReindex, options.onProgress);
 
     const durationMs = Date.now() - startTime;
     console.error(
@@ -59,6 +75,29 @@ export class BoxCrawler {
     };
   }
 
+  /**
+   * Paths are stored from the Box root, so a crawl that starts in a sub-folder still produces
+   * paths like /Finance/2026/ and not /2026/. Falls back to '/' for the root or if unreadable.
+   */
+  private async resolveBasePath(startFolderId: string): Promise<string> {
+    if (startFolderId === '0') return '/';
+    try {
+      const client = await this.clientProvider();
+      const folder: any = await withRateLimitRetry(
+        () => client.folders.getFolderById(startFolderId, { queryParams: { fields: ['id', 'name', 'path_collection'] } }),
+        { maxRetries: 2 },
+        `crawl_base_path_${startFolderId}`
+      );
+      const parents: string[] = (folder?.pathCollection?.entries ?? [])
+        .map((p: any) => String(p?.name ?? ''))
+        .filter((n: string) => n && n !== 'All Files');
+      return `/${[...parents, String(folder?.name ?? '')].filter(Boolean).join('/')}/`;
+    } catch (err: any) {
+      console.error(`[BoxCrawler] Could not resolve path of folder ${startFolderId}; using relative paths: ${err?.message || err}`);
+      return '/';
+    }
+  }
+
   private async crawlFolder(
     folderId: string,
     currentPath: string,
@@ -73,7 +112,7 @@ export class BoxCrawler {
     }
 
     this.scannedFolders++;
-    const client = await getBoxClient();
+    const client = await this.clientProvider();
     let offset = 0;
     const limit = 100;
     let hasMore = true;
@@ -138,7 +177,8 @@ export class BoxCrawler {
   private async processFile(entry: any, folderPath: string, forceReindex: boolean): Promise<void> {
     try {
       const fileId = entry.id;
-      const modifiedAt = entry.modifiedAt || entry.modified_at || '';
+      // The SDK returns a { value: Date } wrapper; normalise to an ISO string for storage and comparison.
+      const modifiedAt = boxDateToIso(entry.modifiedAt ?? entry.modified_at);
       const existing = getFileRecord(fileId);
 
       // Incremental check: Skip if modified_at has not changed and not forcing reindex
@@ -150,7 +190,7 @@ export class BoxCrawler {
       // Fetch collaborators for the file
       let collaboratorsStr = '';
       try {
-        const client = await getBoxClient();
+        const client = await this.clientProvider();
         const collabs = await withRateLimitRetry(
           () => client.listCollaborations.getFileCollaborations(fileId),
           { maxRetries: 2 },
@@ -158,7 +198,9 @@ export class BoxCrawler {
         );
 
         if (collabs.entries && collabs.entries.length > 0) {
+          // Same definition of "active" as the retention guard: accepted or pending only.
           const names = collabs.entries
+            .filter((c: any) => isActiveCollaboratorStatus(String(c.status ?? 'accepted')))
             .map((c: any) => c.accessibleBy?.login || c.accessibleBy?.name)
             .filter(Boolean);
           collaboratorsStr = names.join(', ');
@@ -169,7 +211,9 @@ export class BoxCrawler {
 
       const filePath = `${folderPath}${entry.name}`;
       const ownerEmail = entry.ownedBy?.login || entry.ownedBy?.name || '';
-      const contentPreview = entry.description || '';
+      // The Box description stays first, so markers like [protected] keep working; extracted text follows.
+      const body = await this.fetchBodyText(fileId, entry);
+      const contentPreview = [entry.description || '', body].filter(Boolean).join('\n');
 
       const record: IndexedFileRecord = {
         box_id: fileId,
@@ -188,6 +232,28 @@ export class BoxCrawler {
       const errorMsg = `Error indexing file ${entry.id} (${entry.name}): ${err?.message || err}`;
       console.error(`[BoxCrawler] ${errorMsg}`);
       this.errors.push(errorMsg);
+    }
+  }
+
+  /**
+   * Text of the file body for full-text search. Best effort: anything that cannot be downloaded
+   * or read just means the file is indexed by metadata alone, and is never a crawl error.
+   * The type and the reported size are checked before downloading, and the stream is capped.
+   */
+  private async fetchBodyText(fileId: string, entry: any): Promise<string> {
+    const name = String(entry.name ?? '');
+    if (!this.indexContent || !detectFormat(name)) return '';
+    if (Number(entry.size ?? 0) > MAX_INDEX_DOWNLOAD_BYTES) return '';
+    try {
+      const client = await this.clientProvider();
+      const stream: any = await withRateLimitRetry(() => client.downloads.downloadFile(fileId), { maxRetries: 2 }, `crawl_download_${fileId}`);
+      if (!stream) return '';
+      const bytes = await readCapped(stream, MAX_INDEX_DOWNLOAD_BYTES);
+      if (!bytes) return '';
+      return previewToPlainText(extractPreview(name, bytes));
+    } catch (err: any) {
+      console.error(`[BoxCrawler] Could not read content of file ${fileId}; indexing metadata only: ${err?.message || err}`);
+      return '';
     }
   }
 }

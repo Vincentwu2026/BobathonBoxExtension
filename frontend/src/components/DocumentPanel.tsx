@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { ExternalLink, User, Users, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PreviewPanel } from '@/components/PreviewPanel';
 import { RetentionBadge } from '@/components/RetentionBadge';
 import { Snippet } from '@/components/Snippet';
 import { formatDate, safeBoxUrl } from '@/lib/utils';
@@ -64,6 +65,8 @@ export function DocumentPanel({ doc, onClose, compact = false }: Props) {
             <p className="mt-1 text-sm leading-relaxed">{doc.snippet ? <Snippet text={doc.snippet} /> : doc.preview}</p>
           </div>
         )}
+
+        <PreviewPanel docId={doc.id} />
 
         <div>
           <h3 className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">

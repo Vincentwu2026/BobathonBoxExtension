@@ -33,7 +33,7 @@ Enterprise AI backend platform integrating **Box Enterprise** with the **Model C
 +--------------+               +------------------+             +------------------+
 ```
 
-### Three Major Core Systems:
+### Three Major Core Systems (plus a Web UI):
 
 1. **Box MCP Server**:
    Exposes comprehensive Box API actions (search, get file, list folder, upload, move, list collaborators, get versions) as strongly typed MCP tools for AI agents.
@@ -43,6 +43,9 @@ Enterprise AI backend platform integrating **Box Enterprise** with the **Model C
 
 3. **Retention & Deletion-Protection Guard**:
    Enforces strict enterprise data preservation rules. Deletion is automatically refused if a file has **one or more active collaborators** or has an explicit **`do_not_delete` retention tag**. No unconstrained raw deletion tool is exposed.
+
+4. **Web UI & Local API** (additive; the MCP server is unchanged):
+   A React frontend ([`frontend/`](frontend/README.md)) backed by a localhost-only HTTP API (`src/api/server.ts`, `127.0.0.1:8799`). It offers search, a folder explorer, a retention center, audit logs and system status, in **Demo Mode** (seeded fictional data, no credentials) or **Live Box** mode. "Attempt Delete" in the UI is always a dry run.
 
 ---
 
@@ -54,6 +57,8 @@ Enterprise AI backend platform integrating **Box Enterprise** with the **Model C
 │   ├── index.ts                  # MCP Server entrypoint executable
 │   ├── server.ts                 # McpServer setup & tool registrations
 │   ├── box-client.ts             # Singleton Box JWT / Developer token manager
+│   ├── api/                      # Localhost web API for the UI (search, retention, audit, status)
+│   ├── demo/                     # Demo-only MCP server (demo_retention_check)
 │   ├── tools/
 │   │   ├── box-file-tools.ts     # Core Box file & folder MCP tools
 │   │   └── retention-tools.ts   # Retention check & safe delete MCP tools
@@ -68,7 +73,9 @@ Enterprise AI backend platform integrating **Box Enterprise** with the **Model C
 │       └── rate-limiter.ts       # Exponential backoff & 429 retry handler
 ├── scripts/
 │   ├── get-tokens.ts             # CLI tool to exchange JWT credentials for tokens
-│   └── schedule-crawl.ts         # Periodic indexing daemon / cron script
+│   ├── schedule-crawl.ts         # Periodic indexing daemon / cron script
+│   └── seed-demo-data.ts         # Seeds 17 fictional documents into the SQLite index
+├── frontend/                     # React + Vite + Tailwind web UI (see frontend/README.md)
 ├── docs/
 │   ├── retention-policy.md       # Detailed enterprise retention rules & specs
 │   └── smoke-test-results.md     # Component & integration test report
@@ -125,6 +132,8 @@ Create your environment configuration (or export variables in your shell):
 | `BOX_ACCESS_TOKEN` | Direct Developer Access Token | Optional (overrides JWT) |
 | `BOX_DB_PATH` | Path for SQLite index database | Default: `./data/box_index.db` |
 | `BOX_RETENTION_LOG` | Path for retention audit JSONL file | Default: `./data/retention-log.jsonl` |
+| `BOX_INDEX_CONTENT` | Set to `false` to stop the crawler downloading files to index their text | Default: on |
+| `BOX_SAMPLE_DRIVE` | Folder of local sample files used for Demo Mode file previews | Default: `./data/sample-drive` |
 
 ---
 
@@ -323,6 +332,44 @@ Retrieve recent audit log entries for compliance and verification.
 
 ---
 
+## Running the Web UI
+
+```bash
+npm run seed-demo      # load 17 fictional demo documents into the SQLite index
+npm run build
+npm run web-api        # API on http://127.0.0.1:8799
+
+cd frontend && npm install && npm run dev   # UI on http://127.0.0.1:5173
+```
+
+See [`frontend/README.md`](frontend/README.md) for modes, pages, safety properties and configuration.
+
+### File preview
+
+Opening a document shows a **Preview file** button that renders the file's content in the page: Box Notes (`.boxnote`), Word (`.docx`), PowerPoint (`.pptx`), Excel (`.xlsx`) and plain text. PDF and legacy `.doc`/`.ppt`/`.xls` are not supported and say so. Extracted text is always rendered as text, never as HTML, and parsing is bounded (file size, zip entry sizes, blocks, slides, sheets, rows and columns).
+
+- **Live Mode** downloads the file from Box on demand, read-only, after checking its type and size.
+- **Demo Mode** reads from a local folder, so you can try real files without Box access:
+
+```bash
+npm run build
+npm run seed-sample-drive -- /path/to/your/files     # copies supported files into the sample drive and indexes their text
+BOX_SAMPLE_DRIVE=./data/sample-drive npm run web-api
+```
+
+To give local files an owner, collaborators or a do-not-delete flag (so the Retention Center has something to evaluate), put a `governance.json` next to them:
+
+```json
+{ "Plan.docx": { "owner": "me@example.com", "collaborators": ["a@example.com"], "doNotDelete": true } }
+```
+
+### Searching file contents
+
+The crawler downloads new or changed Box Notes, Word, PowerPoint, Excel and text files (up to 5 MB each) and indexes their text next to the Box description, so search matches words inside documents. Unchanged files are not downloaded again. Files that cannot be downloaded or read are still indexed by metadata. Set `BOX_INDEX_CONTENT=false` to turn this off. After upgrading, run a crawl with `BOX_FORCE_REINDEX=true` once to index files that were crawled before.
+
+---
+
+
 ## Scheduled Indexing Daemon
 
 To maintain an up-to-date local index, run the crawler daemon:
@@ -345,7 +392,13 @@ Execute the built-in test suite:
 npm run test
 ```
 
-Verifies FTS5 schema, indexing, search, rate-limiting backoff, retention rules, audit logging, and MCP server startup.
+Verifies FTS5 schema, indexing, search, rate-limiting backoff, retention rules, audit logging, MCP server startup, the crawler (against a fake Box client), and file preview extraction including hostile inputs (zip bombs, false size headers, path traversal).
+
+The test writes to the configured index, so point it elsewhere to keep your data untouched:
+
+```bash
+BOX_DB_PATH=/tmp/test.db BOX_RETENTION_LOG=/tmp/test-log.jsonl npm run test
+```
 
 ---
 

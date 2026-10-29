@@ -19,6 +19,7 @@ import { listDemoDocuments, searchDemoDocuments, DEMO_ID_PREFIX } from './demo.j
 import { getLiveDocument, getLiveFolder, liveDeleteAttempt, searchLive, assertBoxId } from './live.js';
 import { logDemoDeleteAttempt, readDemoAudit, readLiveAudit, ensureDemoAuditSeed } from './audit.js';
 import { getSystemStatus } from './status.js';
+import { getDemoPreview, getLivePreview } from './preview.js';
 import type { DeleteAttemptDTO, DocumentDTO } from './dto.js';
 import { evaluateDemoRetention } from '../demo/demo-retention.js';
 import { connectWithToken, disconnect, getConnection, validateToken } from './connection.js';
@@ -153,6 +154,11 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   // GET /api/demo/documents
   if (method === 'GET' && mode === 'demo' && resource === 'documents' && parts.length === 3) {
     return send(res, 200, { documents: listDemoDocuments() });
+  }
+
+  // GET /api/:mode/documents/:id/preview  (read-only; extracted text, never HTML)
+  if (method === 'GET' && resource === 'documents' && parts.length === 5 && parts[4] === 'preview') {
+    return send(res, 200, mode === 'demo' ? getDemoPreview(parseDemoId(parts[3])) : await getLivePreview(parts[3]));
   }
 
   // GET /api/:mode/documents/:id
