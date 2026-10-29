@@ -1,0 +1,47 @@
+{
+  "mcpServers": {
+    "box-productivity-suite": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/build/index.js"
+      ],
+      "env": {
+        "BOX_CLIENT_ID": "${env:BOX_CLIENT_ID}",
+        "BOX_CLIENT_SECRET": "${env:BOX_CLIENT_SECRET}",
+        "BOX_ENTERPRISE_ID": "${env:BOX_ENTERPRISE_ID}",
+        "BOX_PRIVATE_KEY": "${env:BOX_PRIVATE_KEY}",
+        "BOX_PRIVATE_KEY_PASSPHRASE": "${env:BOX_PRIVATE_KEY_PASSPHRASE}",
+        "BOX_PUBLIC_KEY_ID": "${env:BOX_PUBLIC_KEY_ID}",
+        "BOX_ACCESS_TOKEN": "${env:BOX_ACCESS_TOKEN}",
+        "BOX_CONFIG_FILE": "${env:BOX_CONFIG_FILE}",
+        "BOX_DB_PATH": "${workspaceFolder}/data/box_index.db",
+        "BOX_RETENTION_LOG": "${workspaceFolder}/data/retention-log.jsonl"
+      }
+    },
+    "box-productivity-suite-demo": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/build/demo/index.js"
+      ],
+      "env": {
+        "BOX_DB_PATH": "${workspaceFolder}/data/box_index.db"
+      }
+    },
+    "bob-marketplace": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:39247/mcp",
+      "headers": {
+        "Bob-Marketplace-Token": "bob-marketplace-local"
+      },
+      "disabled": false,
+      "alwaysAllow": [
+        "search_assets",
+        "get_asset",
+        "list_installed",
+        "list_favorites",
+        "suggest_assets",
+        "list_updates"
+      ]
+    }
+  }
+}

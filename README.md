@@ -1,179 +1,361 @@
-# Box MCP Server
+# Box Productivity Suite
 
-A backend productivity suite that wraps IBM Box with three capabilities exposed as MCP tools:
-
-1. **Core File Tools** — search, read, upload, move, and manage files/folders via AI agents
-2. **File Indexing Agent** — crawls Box on a schedule and maintains a local SQLite FTS5 full-text index
-3. **Retention / Deletion-Protection Guard** — prevents files with active collaborators from being deleted or expired
-
-All capabilities are exposed via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) over stdio transport, making them available to Bob and other AI agents.
+Enterprise AI backend platform integrating **Box Enterprise** with the **Model Context Protocol (MCP)**, featuring **Local SQLite FTS5 Full-Text Indexing** and an **Active Collaborator-Aware Retention Guard**.
 
 ---
 
-## Prerequisites
+## Architecture Overview
 
-- **Node.js 20+** (tested on Node 26)
-- A **Box App** configured for JWT (Server Authentication) — [Box JWT auth guide](https://developer.box.com/guides/authentication/jwt/)
-- npm
-
----
-
-## Setup
-
-### 1. Clone and install dependencies
-
-```bash
-git clone https://github.com/Vincentwu2026/BobathonBoxExtension.git
-cd BobathonBoxExtension
-npm install
+```
+                      +-----------------------------------+
+                      |      AI Agents / Bob Client       |
+                      +-----------------+-----------------+
+                                        | (MCP stdio Transport)
+                                        v
+                      +-----------------------------------+
+                      |   Box Productivity MCP Server     |
+                      |        (src/server.ts)            |
+                      +-----------------+-----------------+
+                                        |
+       +--------------------------------+--------------------------------+
+       |                                |                                |
+       v                                v                                v
++--------------+               +------------------+             +------------------+
+|  Box File    |               |  Local Indexing  |             |  Retention Guard |
+|  Tools (7)   |               |  Agent (FTS5)    |             |  & Safe Delete   |
++-------+------+               +--------+---------+             +--------+---------+
+        |                               |                                |
+        | (Rate-Limited API)            | (Local Search)                 | (Audit Log)
+        v                               v                                v
++--------------+               +------------------+             +------------------+
+| Box Platform |               | SQLite Database  |             | JSONL Audit Trail|
+|  JWT Auth    |               | data/box_index.db|             | retention-log    |
++--------------+               +------------------+             +------------------+
 ```
 
-### 2. Configure environment variables
+### Three Major Core Systems:
 
-All Box credentials must be set as environment variables — never hardcoded. Add these to your shell profile or a local `.env` file (which is gitignored):
+1. **Box MCP Server**:
+   Exposes comprehensive Box API actions (search, get file, list folder, upload, move, list collaborators, get versions) as strongly typed MCP tools for AI agents.
 
-| Variable | Description |
-|---|---|
-| `BOX_CLIENT_ID` | OAuth 2.0 client ID from your Box app |
-| `BOX_CLIENT_SECRET` | OAuth 2.0 client secret |
-| `BOX_ENTERPRISE_ID` | Your Box enterprise / organization ID |
-| `BOX_PRIVATE_KEY` | PEM-encoded RSA private key (escape newlines as `\n`) |
-| `BOX_PRIVATE_KEY_ID` | Key ID registered in the Box app |
-| `BOX_PASSPHRASE` | *(Optional)* Passphrase for the private key |
+2. **File Indexing Agent**:
+   Performs recursive and incremental folder crawling into an embedded **SQLite FTS5 full-text search engine**, providing sub-millisecond keyword and BM25 relevance searches over file contents, paths, owners, and collaborators.
 
-Example export (replace values with your own):
-
-```bash
-export BOX_CLIENT_ID="your_client_id"
-export BOX_CLIENT_SECRET="your_client_secret"
-export BOX_ENTERPRISE_ID="your_enterprise_id"
-export BOX_PRIVATE_KEY_ID="your_key_id"
-export BOX_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
-```
-
-### 3. (Optional) Pre-fetch a service account token
-
-If you want to test the token exchange independently before wiring up the full server:
-
-```bash
-npm run get-tokens
-```
-
-This writes a token to `credentials/box-token.json` (gitignored). The server will use env vars if present; the token file is only a fallback.
-
-### 4. Build
-
-```bash
-npm run build
-```
-
-Output is placed in `build/`. Entry point is `build/index.js`.
-
-### 5. Run the server
-
-```bash
-node build/index.js
-```
-
-The server communicates over **stdio** (MCP transport). It is meant to be launched by an MCP host (e.g. Bob), not run directly in a terminal for normal use.
-
----
-
-## MCP Registration (Bob)
-
-Add the following entry to `.bob/mcp.json` in your workspace:
-
-```json
-{
-  "mcpServers": {
-    "box-mcp-server": {
-      "command": "node",
-      "args": ["/absolute/path/to/BobathonBoxExtension/build/index.js"],
-      "env": {
-        "BOX_CLIENT_ID": "${env:BOX_CLIENT_ID}",
-        "BOX_CLIENT_SECRET": "${env:BOX_CLIENT_SECRET}",
-        "BOX_ENTERPRISE_ID": "${env:BOX_ENTERPRISE_ID}",
-        "BOX_PRIVATE_KEY": "${env:BOX_PRIVATE_KEY}",
-        "BOX_PRIVATE_KEY_ID": "${env:BOX_PRIVATE_KEY_ID}",
-        "BOX_PASSPHRASE": "${env:BOX_PASSPHRASE}"
-      }
-    }
-  }
-}
-```
-
-All env vars are forwarded from the shell that starts Bob — no secrets appear in the config file.
-
----
-
-## Available MCP Tools
-
-> Tools are added incrementally across sub-tasks. This list will grow as the project progresses.
-
-### Sub-Task 2 — Core File Tools *(coming next)*
-| Tool | Description |
-|---|---|
-| `box_search` | Full-text search across Box |
-| `box_get_file` | Retrieve file metadata and download URL by file ID |
-| `box_list_folder` | List contents of a folder by folder ID |
-| `box_upload_file` | Upload a file to a target folder |
-| `box_move_file` | Move a file to another folder |
-| `box_list_collaborators` | List all collaborators on a file or folder |
-| `box_get_file_versions` | List version history of a file |
-
-### Sub-Task 3 — Indexing *(coming soon)*
-| Tool | Description |
-|---|---|
-| `index_crawl` | Trigger a full or incremental crawl of a Box folder tree |
-| `index_search` | Query the local FTS5 index with ranked results |
-
-### Sub-Task 4 — Retention Guard *(coming soon)*
-| Tool | Description |
-|---|---|
-| `box_check_retention` | Check if a file/folder is protected from deletion |
-| `box_safe_delete` | Delete a file only if it passes retention checks |
-| `box_set_retention_policy` | Tag a file or folder with a `do_not_delete` policy |
+3. **Retention & Deletion-Protection Guard**:
+   Enforces strict enterprise data preservation rules. Deletion is automatically refused if a file has **one or more active collaborators** or has an explicit **`do_not_delete` retention tag**. No unconstrained raw deletion tool is exposed.
 
 ---
 
 ## Project Structure
 
 ```
-box-mcp-server/
+.
 ├── src/
-│   ├── index.ts              # MCP server entry point (stdio)
-│   ├── box-client.ts         # Singleton Box client (JWT auth)
-│   ├── tools/                # MCP tool implementations
-│   ├── indexer/              # SQLite FTS5 crawler & search
-│   ├── retention/            # Retention guard & logger
-│   └── util/                 # Shared utilities (rate limiter, etc.)
+│   ├── index.ts                  # MCP Server entrypoint executable
+│   ├── server.ts                 # McpServer setup & tool registrations
+│   ├── box-client.ts             # Singleton Box JWT / Developer token manager
+│   ├── tools/
+│   │   ├── box-file-tools.ts     # Core Box file & folder MCP tools
+│   │   └── retention-tools.ts   # Retention check & safe delete MCP tools
+│   ├── indexer/
+│   │   ├── schema.ts             # SQLite FTS5 schema & upsert triggers
+│   │   ├── crawler.ts            # Recursive incremental Box folder crawler
+│   │   └── search.ts             # FTS5 search queries & ranking
+│   ├── retention/
+│   │   ├── guard.ts              # Business logic for retention evaluation
+│   │   └── logger.ts             # Immutable JSONL audit logger
+│   └── util/
+│       └── rate-limiter.ts       # Exponential backoff & 429 retry handler
 ├── scripts/
-│   └── get-tokens.ts         # One-time token exchange script
-├── data/                     # SQLite index & retention log (gitignored)
-├── credentials/              # Box token cache (gitignored)
-├── docs/                     # Retention policy & smoke test results
-├── build/                    # Compiled output (gitignored)
+│   ├── get-tokens.ts             # CLI tool to exchange JWT credentials for tokens
+│   └── schedule-crawl.ts         # Periodic indexing daemon / cron script
+├── docs/
+│   ├── retention-policy.md       # Detailed enterprise retention rules & specs
+│   └── smoke-test-results.md     # Component & integration test report
+├── tests/
+│   └── smoke-test.ts             # Automated test suite
+├── data/                         # Local database and audit logs (gitignored)
+├── credentials/                  # Token cache & private keys (gitignored)
+├── .bob/
+│   └── mcp.json                  # MCP Server registration config
 ├── package.json
 └── tsconfig.json
 ```
 
 ---
 
-## Security Notes
+## Prerequisites & Installation
 
-- **Never commit credentials.** The `credentials/` directory and all `*.env` files are gitignored.
-- All secrets are injected via environment variables at runtime.
-- The `box_safe_delete` tool is the **only** code path that may delete a Box file — no raw delete is exposed.
-- Retention decisions are logged to `data/retention-log.jsonl` for audit purposes.
+### Requirements:
+- **Node.js**: >= 20.0.0 LTS (Node 20, 22, or 24+ supported)
+- **TypeScript**: 5.x+
+- **Box Enterprise Account** with JWT App Authentication configured in the Box Developer Console.
+
+### 1. Clone & Install Dependencies
+
+```bash
+git clone <repo-url> box-productivity-suite
+cd box-productivity-suite
+npm install
+```
+
+### 2. Build the TypeScript Pipeline
+
+```bash
+npm run build
+```
+
+This compiles all modules into `./build/index.js`, `./build/scripts/`, and `./build/tests/`.
 
 ---
 
-## Development Status
+## Configuration & Environment Variables
 
-| Sub-Task | Status |
-|---|---|
-| 1 — Project Scaffolding & OAuth Setup | ✅ Complete |
-| 2 — Box MCP Server Core File Tools | ⬜ Pending |
-| 3 — File Indexing Agent | ⬜ Pending |
-| 4 — Retention / Deletion-Protection Guard | ⬜ Pending |
-| 5 — MCP Registration & End-to-End Validation | ⬜ Pending |
+Create your environment configuration (or export variables in your shell):
+
+| Variable | Description | Required / Default |
+|---|---|---|
+| `BOX_CLIENT_ID` | Box App OAuth2 Client ID | Required for JWT Auth |
+| `BOX_CLIENT_SECRET` | Box App Client Secret | Required for JWT Auth |
+| `BOX_ENTERPRISE_ID` | Box Enterprise ID | Required for JWT Auth |
+| `BOX_PRIVATE_KEY` | RSA Private Key (PEM format with `\n` or multiline) | Required for JWT Auth |
+| `BOX_PRIVATE_KEY_PASSPHRASE`| Passphrase for encrypted private key | Optional |
+| `BOX_PUBLIC_KEY_ID` | Public Key ID from Box Developer Console | Optional |
+| `BOX_CONFIG_FILE` | Path to downloaded Box `config.json` | Optional (overrides individual keys) |
+| `BOX_ACCESS_TOKEN` | Direct Developer Access Token | Optional (overrides JWT) |
+| `BOX_DB_PATH` | Path for SQLite index database | Default: `./data/box_index.db` |
+| `BOX_RETENTION_LOG` | Path for retention audit JSONL file | Default: `./data/retention-log.jsonl` |
+
+---
+
+## Box JWT Authentication Setup
+
+1. In the **Box Developer Console**, create a **Custom App** using **Server Authentication (with JWT)**.
+2. Under **Application Scopes**, enable:
+   - Read all files and folders stored in Box
+   - Write all files and folders stored in Box
+   - Manage Users and Manage Collaborations
+3. Generate a **Public/Private Keypair** and download the `config.json` file.
+4. Exchange JWT credentials and cache tokens securely:
+
+```bash
+# Option A: Using individual environment variables
+export BOX_CLIENT_ID="your_client_id"
+export BOX_CLIENT_SECRET="your_client_secret"
+export BOX_ENTERPRISE_ID="your_enterprise_id"
+export BOX_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
+
+npm run get-tokens
+
+# Option B: Using the downloaded Box JSON config file
+export BOX_CONFIG_FILE="/path/to/box_config.json"
+
+npm run get-tokens
+```
+
+Tokens are saved with restricted permissions (`0600`) at `credentials/box-token.json`.
+
+---
+
+## MCP Server Registration
+
+The server is configured for Bob or Claude Desktop via `.bob/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "box-productivity-suite": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/build/index.js"
+      ],
+      "env": {
+        "BOX_CLIENT_ID": "${env:BOX_CLIENT_ID}",
+        "BOX_CLIENT_SECRET": "${env:BOX_CLIENT_SECRET}",
+        "BOX_ENTERPRISE_ID": "${env:BOX_ENTERPRISE_ID}",
+        "BOX_PRIVATE_KEY": "${env:BOX_PRIVATE_KEY}",
+        "BOX_PRIVATE_KEY_PASSPHRASE": "${env:BOX_PRIVATE_KEY_PASSPHRASE}",
+        "BOX_PUBLIC_KEY_ID": "${env:BOX_PUBLIC_KEY_ID}",
+        "BOX_ACCESS_TOKEN": "${env:BOX_ACCESS_TOKEN}",
+        "BOX_CONFIG_FILE": "${env:BOX_CONFIG_FILE}",
+        "BOX_DB_PATH": "${workspaceFolder}/data/box_index.db",
+        "BOX_RETENTION_LOG": "${workspaceFolder}/data/retention-log.jsonl"
+      }
+    }
+  }
+}
+```
+
+---
+
+## MCP Tool Reference & Examples
+
+### 1. `box_search`
+Search Box enterprise content with filters for extensions, ancestor folders, and types.
+
+```json
+{
+  "query": "Q3 Financial Forecast",
+  "fileExtensions": ["pdf", "xlsx"],
+  "limit": 10
+}
+```
+
+### 2. `box_get_file`
+Retrieve metadata, parent folder hierarchy, and sharing links.
+
+```json
+{
+  "fileId": "1298471982"
+}
+```
+
+### 3. `box_list_folder`
+List contents of a Box folder (`0` for root).
+
+```json
+{
+  "folderId": "0",
+  "limit": 50,
+  "sort": "date",
+  "direction": "DESC"
+}
+```
+
+### 4. `box_upload_file`
+Upload UTF-8 text or Base64 binary file.
+
+```json
+{
+  "name": "executive-summary.md",
+  "parentFolderId": "0",
+  "content": "# Q4 Executive Summary\nAll quarterly targets achieved."
+}
+```
+
+### 5. `box_move_file`
+Move or rename a file in Box.
+
+```json
+{
+  "fileId": "1298471982",
+  "destinationFolderId": "872635411",
+  "newName": "Q3_Report_Final.pdf"
+}
+```
+
+### 6. `box_list_collaborators`
+List all users or groups with active or pending access to a file.
+
+```json
+{
+  "fileId": "1298471982"
+}
+```
+
+### 7. `box_get_file_versions`
+List version history and previous revisions of a file.
+
+```json
+{
+  "fileId": "1298471982"
+}
+```
+
+### 8. `index_crawl`
+Initiate recursive, incremental indexing into the local SQLite FTS5 database.
+
+```json
+{
+  "startFolderId": "0",
+  "maxDepth": 10,
+  "forceReindex": false
+}
+```
+
+### 9. `index_search`
+Query the local FTS5 database with BM25 ranking and snippet previews.
+
+```json
+{
+  "query": "strategic revenue ARR guidance",
+  "limit": 20
+}
+```
+
+### 10. `box_check_retention`
+Inspect whether a file is protected from deletion due to active collaborators or retention tags.
+
+```json
+{
+  "fileId": "1298471982"
+}
+```
+
+### 11. `box_safe_delete`
+Safely delete a file. Automatically refuses and logs if active collaborators or `do_not_delete` tags are found.
+
+```json
+{
+  "fileId": "1298471982",
+  "confirmation": true
+}
+```
+
+### 12. `box_set_retention_policy`
+Mark a file with the `do_not_delete` retention tag and metadata flag.
+
+```json
+{
+  "fileId": "1298471982",
+  "tag": "do_not_delete"
+}
+```
+
+### 13. `box_get_retention_logs`
+Retrieve recent audit log entries for compliance and verification.
+
+```json
+{
+  "limit": 50
+}
+```
+
+---
+
+## Scheduled Indexing Daemon
+
+To maintain an up-to-date local index, run the crawler daemon:
+
+```bash
+# Run continuous daemon (every 60 minutes by default)
+CRAWL_INTERVAL_MINUTES=30 npm run schedule-crawl
+
+# Run a single one-shot crawl and exit
+npm run schedule-crawl -- --once
+```
+
+---
+
+## Automated Smoke Testing
+
+Execute the built-in test suite:
+
+```bash
+npm run test
+```
+
+Verifies FTS5 schema, indexing, search, rate-limiting backoff, retention rules, audit logging, and MCP server startup.
+
+---
+
+## Troubleshooting
+
+1. **`HTTP 429 Too Many Requests`**:
+   The suite automatically handles 429 errors using exponential backoff with jitter via [`src/util/rate-limiter.ts`](src/util/rate-limiter.ts).
+
+2. **`Missing Box JWT Credentials`**:
+   Verify that `BOX_CLIENT_ID`, `BOX_CLIENT_SECRET`, `BOX_ENTERPRISE_ID`, and `BOX_PRIVATE_KEY` (or `BOX_CONFIG_FILE`) are exported in your environment.
+
+3. **`Deletion Blocked` Error**:
+   If `box_safe_delete` refuses deletion, call `box_list_collaborators` to inspect who has access or check if the file has the `do_not_delete` tag. If retention is intentionally being lifted, remove collaborators or clear the tag before retrying.

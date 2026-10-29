@@ -1,33 +1,46 @@
 {
-  "name": "box-mcp-server",
-  "version": "0.1.0",
-  "description": "Box productivity suite MCP server — file tools, indexing, and retention guard",
+  "name": "box-productivity-suite",
+  "version": "1.0.0",
+  "description": "Enterprise AI Box MCP Server with SQLite FTS5 Indexing and Collaborator-Aware Retention Guard",
   "type": "module",
+  "main": "build/index.js",
   "bin": {
-    "box-mcp-server": "./build/index.js"
+    "box-productivity-suite": "./build/index.js"
   },
   "scripts": {
-    "build": "tsc",
-    "build:watch": "tsc --watch",
+    "build": "tsc && tsc -p tsconfig.scripts.json && tsc -p tsconfig.tests.json && (chmod +x build/index.js 2>/dev/null || true)",
     "start": "node build/index.js",
-    "get-tokens": "node --loader ts-node/esm scripts/get-tokens.ts"
+    "test": "tsc -p tsconfig.tests.json && node build/tests/smoke-test.js",
+    "get-tokens": "node build/scripts/get-tokens.js",
+    "schedule-crawl": "node build/scripts/schedule-crawl.js",
+    "seed-demo": "node build/scripts/seed-demo-data.js",
+    "demo-server": "node build/demo/index.js",
+    "web-api": "node build/api/server.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
+    "clean": "rm -rf build"
   },
+  "keywords": [
+    "box",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "fts5",
+    "sqlite",
+    "retention-guard",
+    "enterprise"
+  ],
+  "author": "Enterprise AI Solutions",
+  "license": "Apache-2.0",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "better-sqlite3": "^13.0.3",
+    "@modelcontextprotocol/sdk": "^1.6.1",
     "box-node-sdk": "^10.18.0",
-    "zod": "^4.6.7"
-  },
-  "overrides": {
-    "basic-ftp": "^6.2.3",
-    "get-uri": "^6.0.3",
-    "pac-proxy-agent": "^7.1.0",
-    "proxy-agent": "^6.5.0"
+    "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^22.15.21",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.8.3"
+    "@types/node": "^20.17.24",
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }

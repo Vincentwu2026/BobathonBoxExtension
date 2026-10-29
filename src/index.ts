@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 /**
- * Box MCP Server — entry point (stdio transport)
- * All tool registrations are wired here.
+ * Box Productivity Suite
+ * Model Context Protocol (MCP) Server Entrypoint
  */
 
-console.error("[box-mcp-server] starting…");
+import { runServer } from './server.js';
+
+runServer().catch((error) => {
+  console.error('[BoxProductivitySuite] Fatal startup error:', error);
+  process.exit(1);
+});
