@@ -108,7 +108,7 @@ export function SearchPage() {
 
         {selected && (
           <aside aria-label="Document details" className="2xl:sticky 2xl:top-24 2xl:self-start">
-            <DocumentPanel doc={selected} onClose={() => setSelectedId(null)} />
+            <DocumentPanel doc={selected} onClose={() => setSelectedId(null)} searchQuery={submitted} />
           </aside>
         )}
       </div>

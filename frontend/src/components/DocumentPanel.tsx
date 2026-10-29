@@ -22,9 +22,11 @@ interface Props {
   onClose?: () => void;
   /** Hide the content preview, e.g. when it duplicates a surrounding view. */
   compact?: boolean;
+  /** The search that led here, so Ask Bob can relate the file to it. */
+  searchQuery?: string;
 }
 
-export function DocumentPanel({ doc, onClose, compact = false }: Props) {
+export function DocumentPanel({ doc, onClose, compact = false, searchQuery }: Props) {
   const boxUrl = safeBoxUrl(doc.url);
 
   return (
@@ -66,7 +68,7 @@ export function DocumentPanel({ doc, onClose, compact = false }: Props) {
           </div>
         )}
 
-        <PreviewPanel docId={doc.id} />
+        <PreviewPanel docId={doc.id} fileName={doc.name} searchQuery={searchQuery} />
 
         <div>
           <h3 className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">

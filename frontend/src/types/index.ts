@@ -137,3 +137,11 @@ export interface PreviewResponse {
   fileName: string;
   preview: Preview;
 }
+
+export interface AskBobResponse {
+  documentId: string;
+  fileName: string;
+  /** Bob's reply. Untrusted text: render as text only. */
+  answer: string;
+  documentShortened: boolean;
+}

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, FileSearch } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileSearch, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/card';
+import { AskBob } from '@/components/AskBob';
 import { QueryError } from '@/components/states';
 import { getPreview } from '@/services/previewService';
 import { useMode } from '@/state/ModeContext';
@@ -137,7 +138,7 @@ function Sheets({ sheets, total }: { sheets: PreviewSheet[]; total: number }) {
         ))}
         {total > sheets.length && <span className="self-center text-xs text-muted-foreground">+{total - sheets.length} more</span>}
       </div>
-      <div className="max-h-96 overflow-auto rounded-md border border-border">
+      <div className="max-h-[60vh] overflow-auto rounded-md border border-border">
         <table className="w-full border-collapse text-xs">
           <thead className="sticky top-0 bg-muted">
             <tr>
@@ -198,12 +199,29 @@ function Body({ preview }: { preview: Preview }) {
   }
 }
 
-export function PreviewPanel({ docId }: { docId: string }) {
+/**
+ * "Preview file" button plus a pop-up showing the whole file. The pop-up is a native modal
+ * <dialog>: the browser traps focus, Escape closes it, and the page behind it is inert.
+ * The file is only downloaded and parsed once the pop-up is opened.
+ */
+export function PreviewPanel({ docId, fileName, searchQuery }: { docId: string; fileName: string; searchQuery?: string }) {
   const { mode } = useMode();
+  const [open, setOpen] = useState(false);
   const [requested, setRequested] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
 
-  // A different document starts closed: previews download and parse the file, so they are on demand.
-  useEffect(() => setRequested(false), [docId, mode]);
+  // A different document starts closed.
+  useEffect(() => {
+    setOpen(false);
+    setRequested(false);
+  }, [docId, mode]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
 
   const query = useQuery({
     queryKey: ['preview', mode, docId],
@@ -213,44 +231,70 @@ export function PreviewPanel({ docId }: { docId: string }) {
     retry: false,
   });
 
+  const preview = query.data?.data.preview;
+
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">File preview</h3>
-        {query.data && query.data.data.preview.kind !== 'unavailable' && (
-          <span className="text-xs text-muted-foreground">{FORMAT_LABEL[query.data.data.preview.format]}</span>
+      <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">File preview</h3>
+      <Button
+        variant="outline"
+        size="sm"
+        className="mt-2"
+        onClick={() => {
+          setRequested(true);
+          setOpen(true);
+        }}
+      >
+        <FileSearch className="h-4 w-4" aria-hidden="true" />
+        Preview file
+      </Button>
+
+      <dialog
+        ref={dialogRef}
+        onClose={() => setOpen(false)}
+        // A click on the backdrop targets the <dialog> element itself, not its content.
+        onClick={(e) => {
+          if (e.target === dialogRef.current) setOpen(false);
+        }}
+        aria-labelledby="preview-title"
+        className="m-auto h-[88vh] w-[min(1000px,94vw)] rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-black/50"
+      >
+        {open && (
+          <div className="flex h-full flex-col">
+            <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-3">
+              <div className="min-w-0">
+                <h2 id="preview-title" className="break-words text-base font-semibold">
+                  {fileName}
+                </h2>
+                {preview && preview.kind !== 'unavailable' && (
+                  <p className="text-xs text-muted-foreground">{FORMAT_LABEL[preview.format]}</p>
+                )}
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="Close preview">
+                <X className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4" data-testid="preview-body">
+              {query.isPending && (
+                <div className="space-y-2" role="status" aria-label="Loading preview">
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-5/6" />
+                </div>
+              )}
+              {query.isError && <QueryError error={query.error} />}
+              {preview && <Body preview={preview} />}
+              {preview && preview.kind !== 'unavailable' && preview.truncated && (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  This is a shortened view of a very large file. Open the file in Box to see everything.
+                </p>
+              )}
+              <AskBob docId={docId} searchQuery={searchQuery} />
+            </div>
+          </div>
         )}
-      </div>
-
-      {!requested && (
-        <Button variant="outline" size="sm" className="mt-2" onClick={() => setRequested(true)}>
-          <FileSearch className="h-4 w-4" aria-hidden="true" />
-          Preview file
-        </Button>
-      )}
-
-      {requested && query.isPending && (
-        <div className="mt-2 space-y-2" role="status" aria-label="Loading preview">
-          <Skeleton className="h-4 w-2/3" />
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-5/6" />
-        </div>
-      )}
-
-      {requested && query.isError && (
-        <div className="mt-2">
-          <QueryError error={query.error} />
-        </div>
-      )}
-
-      {requested && query.data && (
-        <div className="mt-2" data-testid="preview-body">
-          <Body preview={query.data.data.preview} />
-          {query.data.data.preview.kind !== 'unavailable' && query.data.data.preview.truncated && (
-            <p className="mt-2 text-xs text-muted-foreground">Preview shortened. Open the file in Box to see everything.</p>
-          )}
-        </div>
-      )}
+      </dialog>
     </div>
   );
 }

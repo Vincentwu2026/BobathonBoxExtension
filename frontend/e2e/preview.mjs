@@ -60,6 +60,7 @@ for (const [name, tag, expect] of files) {
     await settle(300);
     const body = await page.$eval('[data-testid="preview-body"]', (e) => e.innerText);
     check(`${tag}: preview renders`, body.length > 20 && expect.every((s) => body.includes(s)), `${body.length} chars`);
+    check(`${tag}: opens as a modal pop-up`, await page.$eval('dialog', (d) => d.open && d.matches(':modal')));
     await page.screenshot({ path: `${OUT}/preview-${tag}.png` });
 
     if (tag === 'pptx') {
@@ -78,6 +79,10 @@ for (const [name, tag, expect] of files) {
       const injected = await page.$$eval('[data-testid="preview-body"] script', (s) => s.length);
       check('xlsx: no script element injected', injected === 0);
     }
+
+    await page.keyboard.press('Escape');
+    await settle(200);
+    check(`${tag}: Escape closes the pop-up`, await page.$eval('dialog', (d) => !d.open));
   } catch (e) {
     check(`${tag} (script error)`, false, e.message);
     await page.screenshot({ path: `${OUT}/preview-${tag}-error.png` });

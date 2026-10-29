@@ -132,6 +132,8 @@ Create your environment configuration (or export variables in your shell):
 | `BOX_ACCESS_TOKEN` | Direct Developer Access Token | Optional (overrides JWT) |
 | `BOX_DB_PATH` | Path for SQLite index database | Default: `./data/box_index.db` |
 | `BOX_RETENTION_LOG` | Path for retention audit JSONL file | Default: `./data/retention-log.jsonl` |
+| `BOBSHELL_API_KEY` | Bob API key (scope **Inference**) used by "Ask Bob". Put it in `./.env`, never in code | Optional; Ask Bob is off without it |
+| `BOB_CLI_PATH` | Path to the Bob Shell executable | Default: `bob` on `PATH` |
 | `BOX_INDEX_CONTENT` | Set to `false` to stop the crawler downloading files to index their text | Default: on |
 | `BOX_SAMPLE_DRIVE` | Folder of local sample files used for Demo Mode file previews | Default: `./data/sample-drive` |
 
@@ -362,6 +364,23 @@ To give local files an owner, collaborators or a do-not-delete flag (so the Rete
 ```json
 { "Plan.docx": { "owner": "me@example.com", "collaborators": ["a@example.com"], "doNotDelete": true } }
 ```
+
+### Ask Bob
+
+The preview pop-up has an **Ask Bob about this file** box. After a search it also offers **Relate to my search**, which asks how the file relates to what you searched for. The API server extracts the file's text and runs [Bob Shell](https://bob.ibm.com) non-interactively on it (`bob --auth-method api-key -p …`).
+
+Setup (once):
+
+1. Install Bob Shell: `curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash`, then run `bob --accept-license -p "hello"` once to accept the licence.
+2. Create an API key with scope **Inference** in the Bob web portal, and put it in `./.env` (gitignored; the API loads it at start-up):
+
+   ```
+   BOBSHELL_API_KEY=your-key-here
+   ```
+
+3. Restart `npm run web-api`.
+
+Safety properties: the key stays on the server (never sent to the browser, logged, or put on a command line); Bob Shell is started with only that key in its environment, so Box credentials are not passed on; it runs in an empty temporary folder with its built-in tools switched off and without `--yolo`; the file text is passed on stdin inside a random boundary and labelled as untrusted data; questions are limited to 500 characters, answers to 64 KB, a call to 120 s, and two questions can run at once. Note that the extracted text of the file you ask about **is sent to Bob's service**, so do not use it on files that may not leave your organisation.
 
 ### Searching file contents
 

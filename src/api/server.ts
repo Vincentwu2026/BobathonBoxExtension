@@ -20,11 +20,19 @@ import { getLiveDocument, getLiveFolder, liveDeleteAttempt, searchLive, assertBo
 import { logDemoDeleteAttempt, readDemoAudit, readLiveAudit, ensureDemoAuditSeed } from './audit.js';
 import { getSystemStatus } from './status.js';
 import { getDemoPreview, getLivePreview } from './preview.js';
+import { MAX_QUESTION_CHARS, MAX_SEARCH_QUERY_CHARS, askBobAboutDocument } from './ask-bob.js';
 import type { DeleteAttemptDTO, DocumentDTO } from './dto.js';
 import { evaluateDemoRetention } from '../demo/demo-retention.js';
 import { connectWithToken, disconnect, getConnection, validateToken } from './connection.js';
 
 const HOST = '127.0.0.1';
+// Secrets such as BOBSHELL_API_KEY live in ./.env (gitignored). Real environment variables win.
+try {
+  process.loadEnvFile('.env');
+} catch (err) {
+  if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') console.error('[WebApi] Could not read .env; continuing without it.');
+}
+
 const PORT = Number.parseInt(process.env.WEB_API_PORT || '8799', 10);
 const ORIGIN_PATTERN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
 const HOST_PATTERN = /^(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
@@ -159,6 +167,22 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   // GET /api/:mode/documents/:id/preview  (read-only; extracted text, never HTML)
   if (method === 'GET' && resource === 'documents' && parts.length === 5 && parts[4] === 'preview') {
     return send(res, 200, mode === 'demo' ? getDemoPreview(parseDemoId(parts[3])) : await getLivePreview(parts[3]));
+  }
+
+  // POST /api/:mode/documents/:id/ask   { question, searchQuery? }  -> Bob answers about this file
+  if (method === 'POST' && resource === 'documents' && parts.length === 5 && parts[4] === 'ask') {
+    const body = (await readJsonBody(req)) as { question?: unknown; searchQuery?: unknown } | null;
+    const question = typeof body?.question === 'string' ? body.question.trim() : '';
+    if (question.length === 0 || question.length > MAX_QUESTION_CHARS) {
+      throw new ApiError(400, 'BAD_REQUEST', `question must be 1-${MAX_QUESTION_CHARS} characters.`);
+    }
+    let searchQuery: string | undefined;
+    if (body?.searchQuery !== undefined) {
+      searchQuery = typeof body.searchQuery === 'string' ? body.searchQuery.trim() : '';
+      if (searchQuery.length > MAX_SEARCH_QUERY_CHARS) throw new ApiError(400, 'BAD_REQUEST', `searchQuery must be at most ${MAX_SEARCH_QUERY_CHARS} characters.`);
+    }
+    const documentId = mode === 'demo' ? parseDemoId(parts[3]) : parts[3];
+    return send(res, 200, await askBobAboutDocument({ mode, documentId, question, searchQuery: searchQuery || undefined }));
   }
 
   // GET /api/:mode/documents/:id
