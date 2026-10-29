@@ -44,6 +44,8 @@ export interface AskBobResponse {
 export interface BobRunOptions {
   command?: string;
   timeoutMs?: number;
+  /** Replaces the default "answer a question about one document" instructions (used by file search). */
+  instructions?: string;
 }
 
 export function bobIsConfigured(): boolean {
@@ -60,8 +62,12 @@ const INSTRUCTIONS =
   'the answer, say so. When a search query is given, say how the document relates to it. ' +
   'Reply in plain text, concisely.';
 
+export function buildBoundary(): string {
+  return `BOUNDARY-${crypto.randomBytes(12).toString('hex')}`;
+}
+
 export function buildBobInput(fileName: string, documentText: string, question: string, searchQuery: string | undefined): { input: string; boundary: string } {
-  const boundary = `BOUNDARY-${crypto.randomBytes(12).toString('hex')}`;
+  const boundary = buildBoundary();
   const parts = [`${boundary} DOCUMENT (file name: ${JSON.stringify(fileName)})`, documentText, `${boundary} END DOCUMENT`];
   if (searchQuery) parts.push(`${boundary} SEARCH QUERY`, searchQuery, `${boundary} END SEARCH QUERY`);
   parts.push(`${boundary} QUESTION`, question, `${boundary} END QUESTION`);
@@ -109,7 +115,7 @@ export async function runBob(input: string, options: BobRunOptions = {}): Promis
         '--disable-subagents',
         '--max-turns', '2',
         '--max-cost', '1',
-        INSTRUCTIONS,
+        options.instructions ?? INSTRUCTIONS,
       ];
       const child = spawn(command, args, {
         cwd: workDir,
@@ -180,6 +186,20 @@ export async function runBob(input: string, options: BobRunOptions = {}): Promis
   }
 }
 
+/** Runs `fn` while holding one of the (few) Bob slots, so a burst of requests cannot spawn unlimited processes. */
+export async function withBobSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (!bobIsConfigured()) {
+    throw new ApiError(503, 'BOB_NOT_CONFIGURED', 'Ask Bob is not set up on the server. Set BOBSHELL_API_KEY and install Bob Shell.');
+  }
+  if (inFlight >= MAX_CONCURRENT) throw new ApiError(429, 'RATE_LIMITED', 'Bob is busy with other questions. Please try again in a moment.');
+  inFlight += 1;
+  try {
+    return await fn();
+  } finally {
+    inFlight -= 1;
+  }
+}
+
 export interface AskBobRequest {
   mode: 'demo' | 'live';
   /** Already validated by the caller (numeric Box id; demo ids are checked by parseDemoId). */
@@ -188,14 +208,8 @@ export interface AskBobRequest {
   searchQuery?: string;
 }
 
-export async function askBobAboutDocument(req: AskBobRequest, options: BobRunOptions = {}): Promise<AskBobResponse> {
-  if (!bobIsConfigured()) {
-    throw new ApiError(503, 'BOB_NOT_CONFIGURED', 'Ask Bob is not set up on the server. Set BOBSHELL_API_KEY and install Bob Shell.');
-  }
-  if (inFlight >= MAX_CONCURRENT) throw new ApiError(429, 'RATE_LIMITED', 'Bob is busy with other questions. Please try again in a moment.');
-
-  inFlight += 1;
-  try {
+export function askBobAboutDocument(req: AskBobRequest, options: BobRunOptions = {}): Promise<AskBobResponse> {
+  return withBobSlot(async () => {
     const loaded = req.mode === 'demo' ? getDemoPreview(req.documentId) : await getLivePreview(req.documentId);
     if (loaded.preview.kind === 'unavailable') {
       throw new ApiError(422, 'NO_CONTENT', 'Bob cannot read this file: no text could be extracted from it.');
@@ -211,7 +225,5 @@ export async function askBobAboutDocument(req: AskBobRequest, options: BobRunOpt
     if (!answer) throw new ApiError(502, 'BOB_FAILED', 'Bob could not answer. Please try again.');
 
     return { documentId: loaded.documentId, fileName: loaded.fileName, answer, documentShortened };
-  } finally {
-    inFlight -= 1;
-  }
+  });
 }

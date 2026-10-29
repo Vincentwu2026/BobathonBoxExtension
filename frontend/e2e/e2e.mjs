@@ -3,7 +3,8 @@
 //
 //   Prereqs: API running (npm run web-api in the repo root) and `npm run dev` here.
 //            Needs: npm install --no-save puppeteer-core
-//   Run:     node e2e/e2e.mjs            (add ASK_BOB=1 to also make one real Bob call, ~$0.01-0.06)
+//   Run:     node e2e/e2e.mjs            (the search step makes one real Bob call, ~$0.01-0.06;
+//                                         add ASK_BOB=1 for a second one in the pop-up)
 
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
@@ -49,13 +50,18 @@ try {
   check('each file shows a Protected / Unprotected badge', names.every((n) => /Protected|Unprotected/.test(n)) && protectedCount > 0 && protectedCount < 8, `${protectedCount} protected`);
   await page.screenshot({ path: `${OUT}/ui-demo.png` });
 
-  // Search inside files.
-  await page.type('input[aria-label="Search files"]', 'renewal');
+  // Search goes through Bob (a real call, ~$0.01-0.06). "deals" and "close" appear in no file's wording
+  // the way the query does, so only a reader who understands the files can answer it.
+  await page.type('input[aria-label="Search files"]', 'which deals might not close this quarter');
   await page.keyboard.press('Enter');
-  await settle(800);
-  const found = await page.$$eval('main ul li', (l) => l.length);
-  check('search finds words inside files', found === 2, `${found} results`);
-  check('matched words are highlighted', (await page.$$('main ul li mark')).length > 0);
+  await page.waitForFunction(() => document.body.innerText.includes('Bob is reading the files'), { timeout: 5000 }).catch(() => {});
+  check('shows that Bob is working', (await bodyText()).includes('Bob is reading the files') || (await page.$$('[data-testid="bob-reason"]')).length > 0);
+  await page.waitForSelector('[data-testid="bob-reason"]', { timeout: 150000 });
+  const found = await page.$$eval('main ul li', (l) => l.map((x) => x.innerText));
+  check('Bob picks the file that mentions the at-risk quarter', found.length >= 1 && found.some((t) => t.includes('Northwind_Account_Plan')), `${found.length} result(s)`);
+  check('Bob does not return unrelated files', !found.some((t) => t.includes('Team_Offsite')));
+  check('each result says why it matched', (await page.$$('[data-testid="bob-reason"]')).length === found.length);
+  check('result count mentions Bob', /Bob found/.test(await bodyText()));
   await page.screenshot({ path: `${OUT}/ui-search.png` });
 
   // Open a file in the pop-up.

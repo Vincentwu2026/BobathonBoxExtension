@@ -22,6 +22,7 @@ import { logDemoDeleteAttempt, readDemoAudit, readLiveAudit, ensureDemoAuditSeed
 import { getSystemStatus } from './status.js';
 import { getDemoPreview, getLivePreview, sampleDriveDir } from './preview.js';
 import { seedSampleFiles } from '../demo/seed-files.js';
+import { MAX_SEARCH_CHARS, searchDemo } from './bob-search.js';
 import { MAX_QUESTION_CHARS, MAX_SEARCH_QUERY_CHARS, askBobAboutDocument } from './ask-bob.js';
 import type { DeleteAttemptDTO, DocumentDTO } from './dto.js';
 import { evaluateDemoRetention } from '../demo/demo-retention.js';
@@ -159,6 +160,17 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     const limit = parseLimit(url, 20, 50);
     const results = mode === 'demo' ? searchDemoDocuments(q, limit) : await searchLive(q, limit);
     return send(res, 200, { query: q, results });
+  }
+
+  // POST /api/demo/search   { query }  -> Bob picks the relevant files (keyword search if Bob is unavailable).
+  // POST rather than GET: every call costs money, and POST needs the custom header that cross-site pages cannot send.
+  if (method === 'POST' && mode === 'demo' && resource === 'search' && parts.length === 3) {
+    const body = (await readJsonBody(req)) as { query?: unknown } | null;
+    const query = typeof body?.query === 'string' ? body.query.trim() : '';
+    if (query.length === 0 || query.length > MAX_SEARCH_CHARS) {
+      throw new ApiError(400, 'BAD_REQUEST', `query must be 1-${MAX_SEARCH_CHARS} characters.`);
+    }
+    return send(res, 200, await searchDemo(query));
   }
 
   // GET /api/demo/documents

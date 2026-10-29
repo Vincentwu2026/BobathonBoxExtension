@@ -45,7 +45,7 @@ Enterprise AI backend platform integrating **Box Enterprise** with the **Model C
    Enforces strict enterprise data preservation rules. Deletion is automatically refused if a file has **one or more active collaborators** or has an explicit **`do_not_delete` retention tag**. No unconstrained raw deletion tool is exposed.
 
 4. **Web UI & Local API** (additive; the MCP server is unchanged):
-   A React frontend ([`frontend/`](frontend/README.md)) backed by a localhost-only HTTP API (`src/api/server.ts`, `127.0.0.1:8799`). One simple page with two tabs: **Demo files** (8 sample documents that work with no credentials: search inside them, open one in a pop-up, see whether it can be deleted, ask Bob about it) and **My Box** (shows that your own files are waiting for Box admin approval).
+   A React frontend ([`frontend/`](frontend/README.md)) backed by a localhost-only HTTP API (`src/api/server.ts`, `127.0.0.1:8799`). One simple page with two tabs: **Demo files** (8 sample documents: search them through Bob, open one in a pop-up, see whether it can be deleted, ask Bob about it) and **My Box** (shows that your own files are waiting for Box admin approval).
 
 ---
 
@@ -374,7 +374,14 @@ Setup (once):
 
 Safety properties: the key stays on the server (never sent to the browser, logged, or put on a command line); Bob Shell is started with only `PATH`, `HOME` and that key in its environment, so Box credentials are not passed on; it runs in an empty temporary folder in `ask` mode with all tool groups, MCP and sub-agents disabled, a 2-turn and $1 cap, and without `--trust`; the file text is passed on stdin inside a random boundary and labelled as untrusted data; questions are limited to 500 characters, answers to 64 KB, a call to 120 s, and two questions can run at once. Note that the extracted text of the file you ask about **is sent to Bob's service**, so do not use it on files that may not leave your organisation.
 
-### Searching file contents
+### Search through Bob
+
+The search box on the **Demo files** tab sends your query to Bob. The API (`POST /api/demo/search`, `src/api/bob-search.ts`) gives Bob the text of the demo files, and Bob replies with the files that are relevant and one sentence on why each matches, so it finds files by meaning, not just by shared words (for example "which deals might not close this quarter" finds the account plan that marks Q4 as "At risk"). It uses the same safeguards as Ask Bob: key kept on the server, ask mode with all tools off, empty temp folder, file text fenced as untrusted data. Bob's reply is also treated as untrusted: it must be the expected JSON, can only name files that were sent, and each reason is cut to a short plain-text sentence.
+
+- **Cost and data:** each search is one Bob call (roughly $0.01–0.06, a few seconds), and it sends the text of **all** the demo files (up to 6,000 characters each) to Bob's service. That is fine for the made-up demo files; do not point `BOX_SAMPLE_DRIVE` at files that may not leave your organisation.
+- **Fallback:** if Bob is not set up, is busy, or gives an unusable reply, the page says so and shows a plain word search (SQLite FTS5) instead, so search never just breaks.
+
+### Searching file contents (word search)
 
 The crawler downloads new or changed Box Notes, Word, PowerPoint, Excel and text files (up to 5 MB each) and indexes their text next to the Box description, so search matches words inside documents. Unchanged files are not downloaded again. Files that cannot be downloaded or read are still indexed by metadata. Set `BOX_INDEX_CONTENT=false` to turn this off. After upgrading, run a crawl with `BOX_FORCE_REINDEX=true` once to index files that were crawled before.
 

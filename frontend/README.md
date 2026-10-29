@@ -4,7 +4,7 @@ React + TypeScript + Vite + Tailwind CSS + React Query + Lucide. One page, two t
 
 | Tab | What it does |
 |---|---|
-| **Demo files** (default) | Lists 8 sample documents. Search inside them, click one to open the whole file in a pop-up, see its owner and whether it could be deleted, and ask Bob about it. |
+| **Demo files** (default) | Lists 8 sample documents. Search them through Bob (he reads the files and says why each one matches), click one to open the whole file in a pop-up, see its owner and whether it could be deleted, and ask Bob about it. |
 | **My Box** | Says your own Box files are waiting for Box administrator approval, with a button back to the demo files. |
 
 ## Run it
@@ -26,6 +26,7 @@ npm run dev            # http://127.0.0.1:5173
 - **Nothing is ever deleted.** The website has no delete button. Deletion status is only shown.
 - Extracted file text is always rendered as text, never as HTML.
 - The API binds to `127.0.0.1` only, sends no CORS headers, checks the `Host` header, requires a custom header on POST, and validates all input. The Vite dev server proxies `/api`, so the browser uses a single origin.
+- Search and Ask Bob send file text to Bob's service. Each search sends the text of all 8 demo files and costs roughly $0.01–0.06. If Bob is unavailable, search falls back to a plain word search and says so.
 - The Bob API key stays on the server (`./.env`, gitignored); the browser only sends the question.
 
 ## Checking it
