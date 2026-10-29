@@ -6,7 +6,7 @@ interface ErrorBody {
   error?: { code?: unknown; message?: unknown };
 }
 
-async function request<T>(method: 'GET' | 'POST', path: string, timeoutMs: number, body?: unknown): Promise<T> {
+async function request<T>(method: 'GET' | 'POST', path: string, timeoutMs: number, body?: unknown, raw?: Blob): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -15,13 +15,13 @@ async function request<T>(method: 'GET' | 'POST', path: string, timeoutMs: numbe
       method,
       signal: controller.signal,
       cache: 'no-store',
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(raw ? { body: raw } : body !== undefined ? { body: JSON.stringify(body) } : {}),
       headers: {
         Accept: 'application/json',
         // The API rejects POSTs without this header, which forces a CORS preflight for any
         // cross-origin caller. Same-origin calls through the Vite proxy are unaffected.
         ...(method === 'POST' ? { 'x-bps-client': 'web' } : {}),
-        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(raw ? { 'Content-Type': 'application/octet-stream' } : body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
     });
 
@@ -59,4 +59,9 @@ export function apiGet<T>(path: string, timeoutMs = 20_000): Promise<T> {
 
 export function apiPost<T>(path: string, timeoutMs = 20_000, body?: unknown): Promise<T> {
   return request<T>('POST', path, timeoutMs, body);
+}
+
+/** Sends a file's bytes as the whole request body. */
+export function apiUpload<T>(path: string, file: Blob, timeoutMs = 60_000): Promise<T> {
+  return request<T>('POST', path, timeoutMs, undefined, file);
 }

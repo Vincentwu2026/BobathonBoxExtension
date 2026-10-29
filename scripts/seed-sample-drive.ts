@@ -5,7 +5,7 @@
  *
  *   npm run seed-sample-drive -- <folder>
  *
- * The folder is copied into BOX_SAMPLE_DRIVE (default ./demo-files), which is where the preview
+ * The folder is copied into BOX_SAMPLE_DRIVE (default ./data/demo-workspace), which is where the preview
  * API reads from. See src/demo/seed-files.ts for the optional governance.json sidecar.
  */
 

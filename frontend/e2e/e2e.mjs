@@ -1,11 +1,14 @@
 // End-to-end check of the simplified UI in a real (headless) Chrome: two tabs, 8 demo files,
-// search, pop-up preview with deletion status, and Ask Bob.
+// search, pop-up preview with deletion status, upload / permissions / delete, and Ask Bob.
 //
 //   Prereqs: API running (npm run web-api in the repo root) and `npm run dev` here.
 //            Needs: npm install --no-save puppeteer-core
 //   Run:     node e2e/e2e.mjs            (the search step makes one real Bob call, ~$0.01-0.06;
 //                                         add ASK_BOB=1 for a second one in the pop-up)
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 
@@ -24,7 +27,8 @@ const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new'
 const page = await browser.newPage();
 await page.setViewport({ width: 1100, height: 900 });
 const errors = [];
-page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+// The browser logs the deliberate 409 (delete of a protected file) as a console error; that one is expected.
+page.on('console', (m) => { if (m.type() === 'error' && !/status of 409/.test(m.text())) errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message));
 
 const clickText = async (sel, label) => {
@@ -101,6 +105,90 @@ try {
     check(`${name} opens`, t.includes(expect), t.slice(0, 40).replace(/\n/g, ' '));
     await page.keyboard.press('Escape');
     await settle(200);
+  }
+
+  // Upload, change permissions, delete (no Bob calls). Uses a throwaway text file and removes it again.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bps-e2e-'));
+  const upFile = path.join(tmp, 'E2E_Upload_Test.txt');
+  fs.writeFileSync(upFile, 'Uploaded by the end-to-end check. Kiwi budget notes.');
+  const openRowCount = () => page.$$eval('main ul li', (l) => l.length);
+  // Remove anything a previous failed run left behind, so the upload below starts from the 8 bundled files.
+  await page.evaluate(async () => {
+    const post = (url, body) => fetch(url, { method: 'POST', headers: { 'x-bps-client': 'web', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    for (const d of (await (await fetch('/api/demo/documents')).json()).documents) {
+      if (d.name !== 'E2E_Upload_Test.txt') continue;
+      await post(`/api/demo/documents/${d.id}/permissions`, { collaborators: [], doNotDelete: false });
+      await post(`/api/demo/documents/${d.id}/delete`, {});
+    }
+  });
+  await page.reload({ waitUntil: 'networkidle0' });
+  try {
+    if (await page.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Show all')))) {
+      await clickText('button', 'Show all');
+      await settle(600);
+    }
+    const input = await page.$('[data-testid="upload-input"]');
+    await input.uploadFile(upFile);
+    await page.waitForFunction(() => document.querySelector('dialog')?.innerText.includes('E2E_Upload_Test.txt') && document.querySelector('dialog')?.open, { timeout: 8000 });
+    await settle(500);
+    check('upload adds the file and opens it', (await page.$eval('dialog', (d) => d.innerText)).includes('Kiwi budget notes'));
+    check('new upload is Unprotected', /Unprotected/.test(await page.$eval('[data-testid="retention-line"]', (e) => e.innerText)));
+    await page.evaluate(() => { document.querySelector('[data-testid="manage-file"]').open = true; });
+    check('delete is allowed for an unprotected file', await page.evaluate(() => ![...document.querySelectorAll('dialog button')].find((b) => b.textContent.includes('Delete file')).disabled));
+
+    // Share it: it becomes protected and delete is disabled.
+    await page.type('input[aria-label="Add a collaborator by email"]', 'teammate@example.com');
+    await page.keyboard.press('Enter');
+    await clickText('dialog button', 'Save permissions');
+    await page.waitForFunction(() => /Protected/.test(document.querySelector('[data-testid="retention-line"]')?.innerText ?? '') && !/Unprotected/.test(document.querySelector('[data-testid="retention-line"]').innerText), { timeout: 8000 });
+    check('adding a collaborator protects the file', true);
+    check('delete is disabled with an explanation while protected', await page.evaluate(() => [...document.querySelectorAll('dialog button')].find((b) => b.textContent.includes('Delete file')).disabled && !!document.querySelector('[data-testid="delete-hint"]')));
+    await page.screenshot({ path: `${OUT}/ui-permissions.png` });
+
+    // Invalid email is explained, not sent.
+    await page.type('input[aria-label="Add a collaborator by email"]', 'not-an-email');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('dialog [role="alert"]', { timeout: 3000 }).catch(() => {});
+    check('an invalid email is explained', (await bodyText()).includes('name@company.com'));
+    // Save with the invalid text still in the box: it must explain, not save.
+    await clickText('dialog button', 'Save permissions');
+    check('saving with an invalid email in the box does not save', /name@company.com/.test(await bodyText()) && /Protected/.test(await page.$eval('[data-testid="retention-line"]', (e) => e.innerText)));
+    await page.$eval('input[aria-label="Add a collaborator by email"]', (e) => e.select());
+    await page.keyboard.press('Backspace');
+
+    // Unshare it and try the delete flow.
+    await page.click('button[aria-label="Remove teammate@example.com"]');
+    await clickText('dialog button', 'Save permissions');
+    await page.waitForFunction(() => /Unprotected/.test(document.querySelector('[data-testid="retention-line"]')?.innerText ?? ''), { timeout: 8000 });
+    check('removing the collaborator unprotects the file', true);
+    await clickText('dialog button', 'Delete file');
+    check('delete asks for confirmation', (await page.$eval('dialog', (d) => d.innerText)).includes('This cannot be undone'));
+    await clickText('dialog button', 'Cancel');
+    check('cancel keeps the file', (await page.$eval('dialog', (d) => d.open)) && (await page.$eval('dialog', (d) => d.innerText)).includes('E2E_Upload_Test.txt'));
+    await clickText('dialog button', 'Delete file');
+    await clickText('dialog button', 'Yes, delete');
+    await page.waitForFunction(() => !document.querySelector('dialog')?.open, { timeout: 8000 });
+    await settle(700);
+    check('deleting closes the pop-up and removes the file', !(await bodyText()).includes('E2E_Upload_Test.txt') && (await openRowCount()) === 8);
+
+    // The server, not the page, enforces protection: a bundled protected file cannot be deleted by a direct call.
+    const status = await page.evaluate(async () => {
+      const docs = (await (await fetch('/api/demo/documents')).json()).documents;
+      const prot = docs.find((d) => d.retention.status === 'protected');
+      const r = await fetch(`/api/demo/documents/${prot.id}/delete`, { method: 'POST', headers: { 'x-bps-client': 'web', 'Content-Type': 'application/json' }, body: '{}' });
+      return r.status;
+    });
+    check('the server refuses to delete a protected file', status === 409, `HTTP ${status}`);
+    check('protected file is still listed', (await openRowCount()) === 8);
+
+    // Bad uploads get a plain-words message.
+    const badFile = path.join(tmp, 'program.exe');
+    fs.writeFileSync(badFile, 'MZ');
+    await (await page.$('[data-testid="upload-input"]')).uploadFile(badFile);
+    await page.waitForSelector('[data-testid="upload-error"]', { timeout: 5000 });
+    check('an unsupported file type is explained', /not supported/.test(await page.$eval('[data-testid="upload-error"]', (e) => e.innerText)));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 
   // My Box tab.

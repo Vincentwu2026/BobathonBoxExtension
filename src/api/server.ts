@@ -8,10 +8,12 @@
  *  - Host header allowlist (DNS-rebinding defence) and Origin check on POST.
  *  - POST requires a custom header, forcing a CORS preflight that this server never grants.
  *  - Strict input validation; errors are generic, details are logged server-side only.
- *  - The UI can never delete from Box: delete attempts are dry runs.
+ *  - The UI can never delete from Box. Demo files (a local working copy) can be uploaded, re-permissioned and
+ *    deleted, and the server refuses to delete a protected file.
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 import http from 'node:http';
 import { URL } from 'node:url';
 import { closeDatabase, getDatabase } from '../indexer/schema.js';
@@ -21,7 +23,8 @@ import { getLiveDocument, getLiveFolder, liveDeleteAttempt, searchLive, assertBo
 import { logDemoDeleteAttempt, readDemoAudit, readLiveAudit, ensureDemoAuditSeed } from './audit.js';
 import { getSystemStatus } from './status.js';
 import { getDemoPreview, getLivePreview, sampleDriveDir } from './preview.js';
-import { seedSampleFiles } from '../demo/seed-files.js';
+import { listSampleFiles, seedSampleFiles } from '../demo/seed-files.js';
+import { MAX_UPLOAD_BYTES, addDemoFile, deleteDemoFile, setDemoPermissions } from './demo-files.js';
 import { MAX_SEARCH_CHARS, searchDemo } from './bob-search.js';
 import { MAX_QUESTION_CHARS, MAX_SEARCH_QUERY_CHARS, askBobAboutDocument } from './ask-bob.js';
 import type { DeleteAttemptDTO, DocumentDTO } from './dto.js';
@@ -109,6 +112,24 @@ async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
   }
 }
 
+/** Reads a raw upload. Rejects early from Content-Length and again while streaming, so memory use stays bounded. */
+async function readUploadBody(req: http.IncomingMessage): Promise<Buffer> {
+  if (!/^application\/octet-stream(;|$)/i.test(req.headers['content-type'] ?? '')) {
+    throw new ApiError(415, 'BAD_REQUEST', 'Content-Type must be application/octet-stream.');
+  }
+  const declared = Number(req.headers['content-length']);
+  if (!Number.isFinite(declared) || declared < 0) throw new ApiError(411, 'BAD_REQUEST', 'Content-Length is required.');
+  if (declared > MAX_UPLOAD_BYTES) throw new ApiError(413, 'TOO_LARGE', `That file is too large. The limit is ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`);
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_UPLOAD_BYTES) throw new ApiError(413, 'TOO_LARGE', `That file is too large. The limit is ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`);
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 async function route(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const host = req.headers.host ?? '';
   if (!HOST_PATTERN.test(host)) throw new ApiError(403, 'FORBIDDEN', 'Host not allowed.');
@@ -173,6 +194,25 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     return send(res, 200, await searchDemo(query));
   }
 
+  // POST /api/demo/files?name=Report.docx   (raw file bytes) -> the new document
+  if (method === 'POST' && mode === 'demo' && resource === 'files' && parts.length === 3) {
+    const name = url.searchParams.get('name') ?? '';
+    return send(res, 201, addDemoFile(name, await readUploadBody(req)));
+  }
+
+  // POST /api/demo/documents/:id/permissions   { owner?, collaborators, doNotDelete } -> the updated document
+  if (method === 'POST' && mode === 'demo' && resource === 'documents' && parts.length === 5 && parts[4] === 'permissions') {
+    const id = parseDemoId(parts[3]);
+    const body = (await readJsonBody(req)) as Record<string, unknown> | null;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ApiError(400, 'BAD_REQUEST', 'Request body must be a JSON object.');
+    return send(res, 200, setDemoPermissions(id, body));
+  }
+
+  // POST /api/demo/documents/:id/delete -> deletes the local copy, or 409 PROTECTED
+  if (method === 'POST' && mode === 'demo' && resource === 'documents' && parts.length === 5 && parts[4] === 'delete') {
+    return send(res, 200, deleteDemoFile(parseDemoId(parts[3])));
+  }
+
   // GET /api/demo/documents
   if (method === 'GET' && mode === 'demo' && resource === 'documents' && parts.length === 3) {
     return send(res, 200, { documents: listDemoDocuments() });
@@ -235,14 +275,26 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   throw new ApiError(404, 'NOT_FOUND', 'Unknown route.');
 }
 
-/** Indexes the demo files folder (local SQLite only) so Demo Mode works with no extra setup step. */
+/**
+ * Indexes the demo working copy (local SQLite only) so Demo Mode works with no extra setup step.
+ * A first start (empty or missing working copy) copies the bundled ./demo-files into it; after that the
+ * working copy is only re-indexed, so uploads, deletions and permission changes survive a restart.
+ */
 function loadDemoFiles(): void {
   const dir = sampleDriveDir();
-  if (!fs.existsSync(dir)) {
-    console.error(`[WebApi] Demo files folder not found (${dir}); Demo Mode will be empty.`);
-    return;
-  }
+  const bundled = path.resolve('demo-files');
   try {
+    const empty = !fs.existsSync(dir) || listSampleFiles(dir).length === 0;
+    if (empty && fs.existsSync(bundled) && path.resolve(dir) !== bundled) {
+      fs.mkdirSync(dir, { recursive: true });
+      const n = seedSampleFiles(bundled, dir);
+      console.error(`[WebApi] Copied ${n} bundled demo file(s) into ${dir}`);
+      return;
+    }
+    if (!fs.existsSync(dir)) {
+      console.error(`[WebApi] Demo files folder not found (${dir}); Demo Mode will be empty.`);
+      return;
+    }
     const n = seedSampleFiles(dir, dir);
     console.error(`[WebApi] Loaded ${n} demo file(s) from ${dir}`);
   } catch (err) {

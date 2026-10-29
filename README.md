@@ -45,7 +45,7 @@ Enterprise AI backend platform integrating **Box Enterprise** with the **Model C
    Enforces strict enterprise data preservation rules. Deletion is automatically refused if a file has **one or more active collaborators** or has an explicit **`do_not_delete` retention tag**. No unconstrained raw deletion tool is exposed.
 
 4. **Web UI & Local API** (additive; the MCP server is unchanged):
-   A React frontend ([`frontend/`](frontend/README.md)) backed by a localhost-only HTTP API (`src/api/server.ts`, `127.0.0.1:8799`). One simple page with two tabs: **Demo files** (8 sample documents: search them through Bob, open one in a pop-up, see whether it can be deleted, ask Bob about it) and **My Box** (shows that your own files are waiting for Box admin approval).
+   A React frontend ([`frontend/`](frontend/README.md)) backed by a localhost-only HTTP API (`src/api/server.ts`, `127.0.0.1:8799`). One simple page with two tabs: **Demo files** (8 sample documents: search them through Bob, open one in a pop-up, upload your own files, change who has access, delete a file, ask Bob about it) and **My Box** (shows that your own files are waiting for Box admin approval).
 
 ---
 
@@ -135,7 +135,7 @@ Create your environment configuration (or export variables in your shell):
 | `BOBSHELL_API_KEY` | Bob API key (scope **Inference**) used by "Ask Bob". Put it in `./.env`, never in code | Optional; Ask Bob is off without it |
 | `BOB_CLI_PATH` | Path to the Bob Shell executable | Default: `bob` on `PATH` |
 | `BOX_INDEX_CONTENT` | Set to `false` to stop the crawler downloading files to index their text | Default: on |
-| `BOX_SAMPLE_DRIVE` | Folder of demo files the API loads and previews | Default: `./demo-files` |
+| `BOX_SAMPLE_DRIVE` | Working copy of the demo files (uploads land here; gitignored) | Default: `./data/demo-workspace` |
 
 ---
 
@@ -338,7 +338,7 @@ Retrieve recent audit log entries for compliance and verification.
 
 ```bash
 npm run build
-npm run web-api        # API on http://127.0.0.1:8799; loads the 8 files in demo-files/ by itself
+npm run web-api        # API on http://127.0.0.1:8799; copies the 8 files in demo-files/ into data/demo-workspace on first start
 
 cd frontend && npm install && npm run dev   # UI on http://127.0.0.1:5173
 ```
@@ -349,7 +349,16 @@ See [`frontend/README.md`](frontend/README.md) for the page layout, safety prope
 
 Clicking a file opens a pop-up that renders its whole content: Box Notes (`.boxnote`), Word (`.docx`), PowerPoint (`.pptx`), Excel (`.xlsx`) and plain text. PDF and legacy `.doc`/`.ppt`/`.xls` are not supported and say so. Extracted text is always rendered as text, never as HTML, and parsing is bounded (file size, zip entry sizes, blocks, slides, sheets, rows and columns).
 
-The 8 demo documents live in [`demo-files/`](demo-files) (Word, PowerPoint, Excel, a Box Note and a text file, all made-up) and the API indexes them every time it starts. The pop-up also shows the owner and whether the file could be deleted. The API still has a read-only path that downloads a file from Box on demand, ready for when the Box app is approved; the website does not use it yet.
+The 8 demo documents live in [`demo-files/`](demo-files) (Word, PowerPoint, Excel, a Box Note and a text file, all made-up). On its first start the API copies them into a working copy, `data/demo-workspace` (gitignored), and indexes that; the bundled originals are never changed. Your uploads, deletions and permission changes live in the working copy and survive a restart. To get the originals back, stop the API and delete `data/demo-workspace`. The pop-up also shows the owner and whether the file could be deleted. The API still has a read-only path that downloads a file from Box on demand, ready for when the Box app is approved; the website does not use it yet.
+
+### Upload, permissions and delete (demo files only)
+
+On the **Demo files** tab, **Upload a file** adds a Word, PowerPoint, Excel, Box Note or text file (up to 10 MB, at most 50 files). In a file's pop-up, **Permissions and delete** changes the owner, the collaborators and the do-not-delete flag, and deletes the file.
+
+- Everything is local: the website only changes the working copy and the local index. It never deletes anything in Box.
+- Delete follows the same retention rules as `box_safe_delete`, decided by the server: a file with a collaborator or a do-not-delete flag is refused (HTTP 409). Remove the protection first, then delete. Permission changes, blocked deletes and deletes are written to `data/demo-audit-log.jsonl`.
+- An upload never replaces an existing file; names are checked (letters, numbers, spaces and `- _ . ( )` only), the type must be supported, and the content must really be that type.
+- Uploaded files stay on this computer, but **searching and Ask Bob send file text to Bob's service**, as for the bundled files. Do not upload anything confidential.
 
 To use your own files instead, point the API at another folder (`BOX_SAMPLE_DRIVE=/path/to/files npm run web-api`), or copy them in with `npm run seed-sample-drive -- /path/to/files`. To give files an owner, collaborators or a do-not-delete flag, put a `governance.json` next to them:
 

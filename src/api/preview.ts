@@ -1,7 +1,7 @@
 /**
  * File previews for the web UI.
  *
- *  - Demo Mode reads a file from the demo folder (BOX_SAMPLE_DRIVE, default ./demo-files),
+ *  - Demo Mode reads a file from the demo working copy (BOX_SAMPLE_DRIVE, default ./data/demo-workspace),
  *    matched by the file name stored in the seeded index.
  *  - Live Mode downloads the file from Box on demand, read-only and size-capped.
  *
@@ -23,7 +23,7 @@ import { assertBoxId } from './live.js';
 const TOO_LARGE = 'This file is too large to preview. Open the file in Box to view it.';
 
 export function sampleDriveDir(): string {
-  return path.resolve(process.env.BOX_SAMPLE_DRIVE || path.join(process.cwd(), 'demo-files'));
+  return path.resolve(process.env.BOX_SAMPLE_DRIVE || path.join(process.cwd(), 'data', 'demo-workspace'));
 }
 
 function unavailable(documentId: string, fileName: string, reason: string): PreviewResponse {

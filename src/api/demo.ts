@@ -15,6 +15,10 @@ import { buildRetention, departmentFromPath } from './retention-view.js';
  */
 export const DEMO_ID_PREFIX = '9000000';
 
+export function getDemoDocument(boxId: string): DocumentDTO | null {
+  return toDocument(boxId);
+}
+
 function toDocument(
   boxId: string,
   extras: { snippet?: string; relevance?: number | null } = {}

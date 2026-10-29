@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { FileSpreadsheet, FileText, Presentation, Search as SearchIcon, Sparkles, StickyNote, X } from 'lucide-react';
+import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FileSpreadsheet, FileText, Presentation, Search as SearchIcon, Sparkles, StickyNote, Upload, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/card';
 import { PreviewDialog } from '@/components/PreviewPanel';
@@ -8,6 +8,8 @@ import { RetentionBadge } from '@/components/RetentionBadge';
 import { Snippet } from '@/components/Snippet';
 import { EmptyState, LoadingRows, QueryError } from '@/components/states';
 import { listDocuments, searchDocuments } from '@/services/searchService';
+import { ACCEPTED_EXTENSIONS, checkUpload, uploadFile } from '@/services/fileService';
+import { userMessage } from '@/services/errors';
 import type { DocumentItem } from '@/types';
 
 function FileIcon({ name }: { name: string }) {
@@ -23,6 +25,30 @@ export function DemoTab() {
   const [input, setInput] = useState('');
   const [submitted, setSubmitted] = useState('');
   const [open, setOpen] = useState<DocumentItem | null>(null);
+
+  const queryClient = useQueryClient();
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const upload = useMutation({
+    mutationFn: uploadFile,
+    onSuccess: async (doc) => {
+      setUploadError(null);
+      await queryClient.invalidateQueries({ queryKey: ['files'] });
+      setOpen(doc);
+    },
+    onError: (err) => setUploadError(userMessage(err)),
+  });
+
+  const onPickFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // so picking the same file again still fires
+    if (!file) return;
+    const problem = checkUpload(file);
+    if (problem) return setUploadError(problem);
+    setUploadError(null);
+    upload.mutate(file);
+  };
 
   const query = useQuery({
     queryKey: ['files', submitted],
@@ -44,8 +70,22 @@ export function DemoTab() {
   return (
     <div>
       <p className="text-sm text-muted-foreground">
-        Sample documents with made-up data. Click a file to read it, check if it can be deleted, or ask Bob about it.
+        Sample documents with made-up data. Click a file to read it, change who has access, delete it, or ask Bob about it.
       </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <input ref={fileInput} type="file" accept={ACCEPTED_EXTENSIONS.join(',')} onChange={onPickFile} className="hidden" aria-label="Choose a file to upload" data-testid="upload-input" />
+        <Button variant="outline" onClick={() => fileInput.current?.click()} disabled={upload.isPending}>
+          <Upload className="h-4 w-4" aria-hidden="true" />
+          {upload.isPending ? 'Uploading…' : 'Upload a file'}
+        </Button>
+        <span className="text-xs text-muted-foreground">Word, PowerPoint, Excel, Box Note or text, up to 10 MB. Kept on this computer.</span>
+      </div>
+      {uploadError && (
+        <p className="mt-2 text-sm text-destructive" role="alert" data-testid="upload-error">
+          {uploadError}
+        </p>
+      )}
 
       <form onSubmit={onSubmit} className="mt-4 flex gap-2" role="search">
         <div className="relative flex-1">
@@ -134,7 +174,19 @@ export function DemoTab() {
         )}
       </div>
 
-      <PreviewDialog doc={open} searchQuery={submitted || undefined} onClose={() => setOpen(null)} />
+      <PreviewDialog
+        doc={open}
+        searchQuery={submitted || undefined}
+        onClose={() => setOpen(null)}
+        onChanged={(doc) => {
+          setOpen(doc);
+          void queryClient.invalidateQueries({ queryKey: ['files'] });
+        }}
+        onDeleted={() => {
+          setOpen(null);
+          void queryClient.invalidateQueries({ queryKey: ['files'] });
+        }}
+      />
     </div>
   );
 }

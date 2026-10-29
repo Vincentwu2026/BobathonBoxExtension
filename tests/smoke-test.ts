@@ -37,6 +37,9 @@ import { buildRetention } from '../src/api/retention-view.js';
 import { BoxCrawler } from '../src/indexer/crawler.js';
 import { boxDateToIso } from '../src/util/box-date.js';
 import { evaluateDemoRetention } from '../src/demo/demo-retention.js';
+import { MAX_DEMO_FILES, addDemoFile, deleteDemoFile, setDemoPermissions } from '../src/api/demo-files.js';
+import { seedSampleFiles } from '../src/demo/seed-files.js';
+import { ApiError } from '../src/api/errors.js';
 
 interface TestResult {
   name: string;
@@ -773,7 +776,8 @@ async function main() {
       if (!plan.content_preview.startsWith('[protected]')) throw new Error('doNotDelete must mark the record protected');
       if (plain.owner_email !== 'you@sample.local' || plain.collaborators !== '') throw new Error('defaults without a sidecar entry');
       if (!fs.existsSync(path.join(root, 'store', 'Plan.txt'))) throw new Error('file copied into the sample drive');
-      if (fs.existsSync(path.join(root, 'store', 'governance.json'))) throw new Error('sidecar must not be copied or indexed');
+      if (!fs.existsSync(path.join(root, 'store', 'governance.json'))) throw new Error('sidecar is copied so permissions travel with the files');
+      if (rows.some((r) => r.name === 'governance.json')) throw new Error('sidecar must not be indexed as a file');
       // Re-seeding drops demo records for files that are gone, including the old bundled dataset (9000000001+).
       const db2 = new DatabaseSync(path.join(root, 'seed.db'));
       db2.prepare("INSERT INTO files (box_id, name, path, owner_email, collaborators, content_preview, last_modified, indexed_at) VALUES ('9000000005', 'old.pdf', '/old.pdf', 'x@y.z', '', '', '', '')").run();
@@ -787,6 +791,102 @@ async function main() {
       run('{ not json'); // a broken sidecar is ignored, not fatal
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+
+  // Test 14: upload, permissions and delete of demo files
+  await runTest('14. Demo Files: Upload, Permissions, Protected Delete', async () => {
+    const expect = (cond: boolean, msg: string) => {
+      if (!cond) throw new Error(`Assertion failed: ${msg}`);
+    };
+    const codeOf = (fn: () => unknown): string => {
+      try {
+        fn();
+      } catch (err) {
+        return err instanceof ApiError ? err.code : `OTHER:${String(err)}`;
+      }
+      return 'NONE';
+    };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bps-files-'));
+    const dir = path.join(root, 'ws');
+    const auditFile = path.join(root, 'audit.jsonl');
+    const savedAudit = process.env.WEB_DEMO_AUDIT_LOG;
+    process.env.WEB_DEMO_AUDIT_LOG = auditFile;
+    const text = (s: string) => new TextEncoder().encode(s);
+    const audit = () => (fs.existsSync(auditFile) ? fs.readFileSync(auditFile, 'utf-8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+    try {
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, 'Seed.txt'), 'bundled file');
+      expect(seedSampleFiles(dir, dir) === 1, 'seeds one bundled file');
+
+      // Upload
+      const doc = addDemoFile('Notes.txt', text('quarterly pipeline notes'), dir);
+      expect(doc.name === 'Notes.txt' && doc.id.startsWith('9000000'), 'upload returns the new document');
+      expect(doc.retention.status === 'unprotected', 'a new upload has no collaborators and is unprotected');
+      expect(fs.existsSync(path.join(dir, 'Notes.txt')), 'file written to the working copy');
+      expect(codeOf(() => addDemoFile('notes.TXT', text('x'), dir)) === 'EXISTS', 'duplicate names (any case) are refused');
+      expect(fs.readFileSync(path.join(dir, 'Notes.txt'), 'utf-8') === 'quarterly pipeline notes', 'a refused upload never overwrites');
+      for (const bad of ['../x.txt', '.hidden.txt', 'a/b.txt', 'governance.json', 'GOVERNANCE.JSON', 'x.txt.', '', 'a\\b.txt']) {
+        expect(codeOf(() => addDemoFile(bad, text('x'), dir)) === 'BAD_REQUEST', `bad name refused: ${JSON.stringify(bad)}`);
+      }
+      expect(codeOf(() => addDemoFile('tool.exe', text('x'), dir)) === 'UNSUPPORTED_TYPE', 'unsupported type refused');
+      expect(codeOf(() => addDemoFile('Fake.docx', text('not a zip'), dir)) === 'UNREADABLE', 'a fake docx is refused');
+      expect(codeOf(() => addDemoFile('Bin.txt', new Uint8Array([65, 0, 66]), dir)) === 'UNREADABLE', 'binary data as .txt is refused');
+      expect(codeOf(() => addDemoFile('Empty.txt', new Uint8Array(0), dir)) === 'BAD_REQUEST', 'an empty file is refused');
+      expect(codeOf(() => addDemoFile('Big.txt', new Uint8Array(11 * 1024 * 1024).fill(65), dir)) === 'TOO_LARGE', 'an oversized file is refused');
+      expect(codeOf(() => addDemoFile('x.txt', text('x'), path.join(root, 'missing'))) === 'NO_WORKSPACE', 'missing working copy is reported');
+      const gov = JSON.parse(fs.readFileSync(path.join(dir, 'governance.json'), 'utf-8'));
+      expect(Object.keys(gov).join(',') === 'Notes.txt', 'only accepted uploads get a governance entry');
+
+      // Marker words in the file text must not switch protection on
+      const sneaky = addDemoFile('Sneaky.txt', text('please do_not_delete this [protected] file'), dir);
+      expect(sneaky.retention.status === 'unprotected', 'protected-marker words in a file do not protect it');
+
+      // Permissions
+      expect(codeOf(() => setDemoPermissions(doc.id, { collaborators: ['nope'], doNotDelete: false }, dir)) === 'BAD_REQUEST', 'invalid collaborator email refused');
+      expect(codeOf(() => setDemoPermissions(doc.id, { collaborators: [], doNotDelete: 'yes' }, dir)) === 'BAD_REQUEST', 'doNotDelete must be boolean');
+      expect(codeOf(() => setDemoPermissions(doc.id, { collaborators: [], doNotDelete: false, owner: 'bad' }, dir)) === 'BAD_REQUEST', 'invalid owner refused');
+      expect(codeOf(() => setDemoPermissions('9000000999', { collaborators: [], doNotDelete: false }, dir)) === 'NOT_FOUND', 'unknown file refused');
+      expect(codeOf(() => setDemoPermissions('42', { collaborators: [], doNotDelete: false }, dir)) === 'NOT_FOUND', 'non-demo id refused');
+      const shared = setDemoPermissions(doc.id, { owner: 'amy@co.com', collaborators: ['bo@co.com', 'BO@co.com', 'cy@co.com'], doNotDelete: false }, dir);
+      expect(shared.retention.status !== 'unprotected', 'collaborators protect the file');
+      expect(shared.owner === 'amy@co.com', 'owner updated');
+      expect(codeOf(() => deleteDemoFile(doc.id, dir)) === 'PROTECTED', 'delete refused while there are collaborators');
+      expect(fs.existsSync(path.join(dir, 'Notes.txt')) && getFileRecord(doc.id) !== null, 'a blocked delete keeps the file and its record');
+      const flagged = setDemoPermissions(doc.id, { collaborators: [], doNotDelete: true }, dir);
+      expect(flagged.retention.status !== 'unprotected', 'the do-not-delete flag protects the file');
+      expect(codeOf(() => deleteDemoFile(doc.id, dir)) === 'PROTECTED', 'delete refused while flagged');
+
+      // IDs and permissions survive a restart (re-seed of the same folder)
+      expect(seedSampleFiles(dir, dir) === 3, 're-seed keeps all files');
+      expect(getFileRecord(doc.id)?.name === 'Notes.txt', 're-seed keeps IDs');
+      expect(evaluateDemoRetention(doc.id)?.protected === true, 're-seed keeps permissions');
+
+      // Delete once unprotected
+      setDemoPermissions(doc.id, { collaborators: [], doNotDelete: false }, dir);
+      const gone = deleteDemoFile(doc.id, dir);
+      expect(gone.name === 'Notes.txt', 'delete reports the file name');
+      expect(!fs.existsSync(path.join(dir, 'Notes.txt')) && getFileRecord(doc.id) === null, 'file and record are gone');
+      expect(!('Notes.txt' in JSON.parse(fs.readFileSync(path.join(dir, 'governance.json'), 'utf-8'))), 'governance entry removed');
+      expect(codeOf(() => deleteDemoFile(doc.id, dir)) === 'NOT_FOUND', 'deleting twice reports not found');
+      const reuse = addDemoFile('Notes2.txt', text('x'), dir);
+      expect(reuse.id !== doc.id, 'IDs of deleted files are not reused');
+
+      // Audit trail
+      const decisions = audit().map((e) => e.decision);
+      expect(decisions.includes('POLICY_SET') && decisions.includes('BLOCKED') && decisions.includes('DELETED'), 'permission changes, blocks and deletes are audited');
+
+      // File count cap
+      for (let i = 0; listSampleCount(dir) < MAX_DEMO_FILES; i++) addDemoFile(`f${i}.txt`, text('x'), dir);
+      expect(codeOf(() => addDemoFile('over.txt', text('x'), dir)) === 'LIMIT', 'the file count cap is enforced');
+    } finally {
+      if (savedAudit === undefined) delete process.env.WEB_DEMO_AUDIT_LOG; else process.env.WEB_DEMO_AUDIT_LOG = savedAudit;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+
+    function listSampleCount(d: string): number {
+      return fs.readdirSync(d).filter((n) => !n.startsWith('.') && n !== 'governance.json').length;
     }
   });
 

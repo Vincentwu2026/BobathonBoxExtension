@@ -160,6 +160,13 @@ export function getFileRecord(boxId: string): IndexedFileRecord | null {
 }
 
 /**
+ * Removes a file record (and, through the trigger, its search entry). Local index only.
+ */
+export function deleteFileRecord(boxId: string): void {
+  getDatabase().prepare('DELETE FROM files WHERE box_id = ?').run(boxId);
+}
+
+/**
  * Close database connection (useful during clean shutdown / tests).
  */
 export function closeDatabase(): void {

@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/card';
 import { AskBob } from '@/components/AskBob';
+import { ManageFile } from '@/components/ManageFile';
 import { QueryError } from '@/components/states';
 import { getPreview } from '@/services/previewService';
 import { RetentionBadge } from '@/components/RetentionBadge';
@@ -200,11 +201,23 @@ function Body({ preview }: { preview: Preview }) {
 }
 
 /**
- * A pop-up showing the whole file, with the file's owner and deletion status on top and Ask Bob below.
+ * A pop-up showing the whole file, with the file's owner and deletion status on top, then permissions/delete and Ask Bob below.
  * It is a native modal <dialog>: the browser traps focus, Escape closes it, and the page behind it is
  * inert. The file is only downloaded and parsed while the pop-up is open.
  */
-export function PreviewDialog({ doc, searchQuery, onClose }: { doc: DocumentItem | null; searchQuery?: string; onClose: () => void }) {
+export function PreviewDialog({
+  doc,
+  searchQuery,
+  onClose,
+  onChanged,
+  onDeleted,
+}: {
+  doc: DocumentItem | null;
+  searchQuery?: string;
+  onClose: () => void;
+  onChanged: (doc: DocumentItem) => void;
+  onDeleted: () => void;
+}) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const open = doc !== null;
 
@@ -271,6 +284,9 @@ export function PreviewDialog({ doc, searchQuery, onClose }: { doc: DocumentItem
             {preview && preview.kind !== 'unavailable' && preview.truncated && (
               <p className="mt-3 text-xs text-muted-foreground">This is a shortened view of a very large file.</p>
             )}
+            <div className="mt-6">
+              <ManageFile doc={doc} onChanged={onChanged} onDeleted={onDeleted} />
+            </div>
             <AskBob docId={doc.id} searchQuery={searchQuery} />
           </div>
         </div>
