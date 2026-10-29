@@ -16,7 +16,7 @@ import path from 'node:path';
 import { zipSync } from 'fflate';
 import { extractPreview, previewToPlainText, PREVIEW_LIMITS } from '../src/preview/index.js';
 import { getDemoPreview, getLivePreview } from '../src/api/preview.js';
-import { askBobAboutDocument, buildBobInput, runBob } from '../src/api/ask-bob.js';
+import { askBobAboutDocument, buildBobInput, parseBobResult, runBob } from '../src/api/ask-bob.js';
 import { getDatabase, upsertFileRecord, getFileRecord, closeDatabase } from '../src/indexer/schema.js';
 import { searchLocalIndex, sanitizeFtsQuery } from '../src/indexer/search.js';
 import { withRateLimitRetry, isRateLimitOrTransientError } from '../src/util/rate-limiter.js';
@@ -583,10 +583,12 @@ async function main() {
       fs.writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o700 });
       return file;
     };
-    // Echoes what it was given, so the test can see exactly what Bob would have received.
+    // Echoes what it was given, so the test can see exactly what Bob would have received, and
+    // wraps it the way `bob run --format json` does.
+    const WRAP = `node -e 'console.log(JSON.stringify({type:"result",status:"success",last_message:require("fs").readFileSync(0,"utf8")}))'`;
     const echo = script(
       'echo.sh',
-      'echo "ARGS: $@"; echo "KEY_PRESENT: ${BOBSHELL_API_KEY:+yes}"; echo "BOX_TOKEN_PRESENT: ${BOX_ACCESS_TOKEN:+yes}"; echo "CWD: $(pwd)"; echo "SETTINGS: $(cat .bob/settings.json)"; echo "STDIN:"; cat'
+      `{ echo "ARGS: $@"; echo "KEY_PRESENT: \${BOBSHELL_API_KEY:+yes}"; echo "BOX_TOKEN_PRESENT: \${BOX_ACCESS_TOKEN:+yes}"; echo "CWD: $(pwd)"; echo "FILES: $(ls -A | wc -l | tr -d " ")"; echo "STDIN:"; cat; } | ${WRAP}`
     );
 
     const saved = { key: process.env.BOBSHELL_API_KEY, box: process.env.BOX_ACCESS_TOKEN, drive: process.env.BOX_SAMPLE_DRIVE };
@@ -609,12 +611,20 @@ async function main() {
       expect(out.includes('KEY_PRESENT: yes'), 'Bob receives the key through its environment');
       expect(!out.includes('test-key-1234567890'), 'the key is never on the command line or in stdin');
       expect(out.includes('BOX_TOKEN_PRESENT: \n') || out.includes('BOX_TOKEN_PRESENT: \r') || /BOX_TOKEN_PRESENT:\s*\n/.test(out), 'Box credentials are not passed to Bob');
-      expect(out.includes('--auth-method api-key') && !out.includes('--yolo'), 'api-key auth, and no auto-approval of tools');
-      expect(out.includes('"core":[]'), 'built-in tools are disabled by the temp project settings');
-      expect(out.includes('bps-bob-') && !out.includes(process.cwd() + '\n'), 'runs in an empty temp folder, not the repo');
+      expect(out.includes('ARGS: run --format json --mode ask --disable-tool-groups'), `headless ask mode with tool groups disabled: ${out.split('\n')[0].slice(0, 120)}`);
+      expect(out.includes('--disable-mcp') && out.includes('--disable-subagents') && out.includes('--max-turns 2') && out.includes('--max-cost 1'), 'MCP and sub-agents off, turn and cost caps set');
+      expect(!out.includes('--trust') && !out.includes('--yolo') && !out.includes('--auto-approve'), 'never trusts the folder or auto-approves tools');
+      expect(out.includes('FILES: 0'), 'runs in an empty folder');
+      expect(out.includes('bps-bob-') && !out.includes(process.cwd() + '\n'), 'runs in a temp folder, not the repo');
       expect(out.includes('ignore previous instructions'), 'document text reaches Bob on stdin');
       const cwdLine = out.split('\n').find((l) => l.startsWith('CWD: '))!.slice(5).trim();
       expect(!fs.existsSync(cwdLine), 'temp folder is removed afterwards');
+
+      // Parsing Bob's JSON-lines output.
+      expect(parseBobResult('progress text\n{"type":"result","status":"success","last_message":" hi "}\n') === 'hi', 'result line is parsed');
+      expect(parseBobResult('{"type":"error","message":"x"}\n{"type":"result","status":"success","last_message":"ok"}') === 'ok', 'error events before the result are ignored');
+      expect(parseBobResult('{"type":"result","status":"failed","last_message":"nope"}') === null, 'a non-success result is not shown as an answer');
+      expect(parseBobResult('not json at all') === null && parseBobResult('') === null, 'garbage yields no answer');
 
       // Failure modes become generic errors that do not leak output or the key.
       const failing = script('fail.sh', 'echo "secret detail test-key-1234567890" >&2; exit 3');

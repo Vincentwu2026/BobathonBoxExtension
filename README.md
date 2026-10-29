@@ -367,11 +367,11 @@ To give local files an owner, collaborators or a do-not-delete flag (so the Rete
 
 ### Ask Bob
 
-The preview pop-up has an **Ask Bob about this file** box. After a search it also offers **Relate to my search**, which asks how the file relates to what you searched for. The API server extracts the file's text and runs [Bob Shell](https://bob.ibm.com) non-interactively on it (`bob --auth-method api-key -p …`).
+The preview pop-up has an **Ask Bob about this file** box. After a search it also offers **Relate to my search**, which asks how the file relates to what you searched for. The API server extracts the file's text and runs [Bob Shell](https://bob.ibm.com) non-interactively on it (`bob run --format json --mode ask …`). Each question costs roughly $0.01–0.06.
 
 Setup (once):
 
-1. Install Bob Shell: `curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash`, then run `bob --accept-license -p "hello"` once to accept the licence.
+1. Install Bob Shell: `curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash`, then run `bob run --accept-license "hello"` once (with `BOBSHELL_API_KEY` set) to accept the licence.
 2. Create an API key with scope **Inference** in the Bob web portal, and put it in `./.env` (gitignored; the API loads it at start-up):
 
    ```
@@ -380,7 +380,7 @@ Setup (once):
 
 3. Restart `npm run web-api`.
 
-Safety properties: the key stays on the server (never sent to the browser, logged, or put on a command line); Bob Shell is started with only that key in its environment, so Box credentials are not passed on; it runs in an empty temporary folder with its built-in tools switched off and without `--yolo`; the file text is passed on stdin inside a random boundary and labelled as untrusted data; questions are limited to 500 characters, answers to 64 KB, a call to 120 s, and two questions can run at once. Note that the extracted text of the file you ask about **is sent to Bob's service**, so do not use it on files that may not leave your organisation.
+Safety properties: the key stays on the server (never sent to the browser, logged, or put on a command line); Bob Shell is started with only `PATH`, `HOME` and that key in its environment, so Box credentials are not passed on; it runs in an empty temporary folder in `ask` mode with all tool groups, MCP and sub-agents disabled, a 2-turn and $1 cap, and without `--trust`; the file text is passed on stdin inside a random boundary and labelled as untrusted data; questions are limited to 500 characters, answers to 64 KB, a call to 120 s, and two questions can run at once. Note that the extracted text of the file you ask about **is sent to Bob's service**, so do not use it on files that may not leave your organisation.
 
 ### Searching file contents
 

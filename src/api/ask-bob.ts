@@ -1,13 +1,18 @@
 /**
- * "Ask Bob": answers a question about one open file by running Bob Shell non-interactively.
+ * "Ask Bob": answers a question about one open file by running Bob Shell (`bob run`, headless).
  *
  * Credentials: BOBSHELL_API_KEY is read from the server's environment only. It is never sent to
  * the browser, logged, or put on a command line, and the child process receives nothing else
  * from this server's environment (no Box tokens).
  *
  * The file's text is untrusted. It goes to Bob on stdin between a random boundary, with an
- * instruction to treat it as data. Bob runs without --yolo (so it can only use tools that need no
- * approval), in an empty temporary folder, so there is nothing in its working directory to read.
+ * instruction to treat it as data. Bob runs in "ask" mode (no editing), with tool groups, MCP and
+ * sub-agents disabled, a turn and cost cap, and no --trust, in an empty temporary folder, so there
+ * is nothing in its working directory to read or damage. Headless runs do not auto-approve tools.
+ *
+ * Verified against Bob Shell 2.0.9: a probe made 0 tool calls, wrote nothing, and ignored an
+ * instruction planted in the document. The tool-group flag alone does not remove tools from the
+ * model's list in that version, which is why the other layers are kept.
  */
 
 import { spawn } from 'node:child_process';
@@ -45,6 +50,8 @@ export function bobIsConfigured(): boolean {
   return Boolean(process.env.BOBSHELL_API_KEY);
 }
 
+const TOOL_GROUPS = 'read,edit,execute,browser,mcp,skill,todo,subagent,mode,plan,artifact';
+
 const INSTRUCTIONS =
   'You answer questions about one document. The document, an optional search query and the question ' +
   'are on stdin, each between lines starting with the boundary marker given there. ' +
@@ -61,7 +68,26 @@ export function buildBobInput(fileName: string, documentText: string, question: 
   return { input: parts.join('\n'), boundary };
 }
 
-/** Runs the Bob Shell CLI once and returns its text output. Exported for tests. */
+/**
+ * `bob run --format json` prints JSON lines. The last `{"type":"result"}` line carries the answer in
+ * `last_message`. A non-"success" status or a missing message means there is no answer to show.
+ */
+export function parseBobResult(stdout: string): string | null {
+  let answer: string | null = null;
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{')) continue;
+    try {
+      const evt = JSON.parse(trimmed) as { type?: unknown; status?: unknown; last_message?: unknown };
+      if (evt.type === 'result') answer = evt.status === 'success' && typeof evt.last_message === 'string' ? evt.last_message.trim() : null;
+    } catch {
+      // Not a JSON line (progress text); ignore it.
+    }
+  }
+  return answer || null;
+}
+
+/** Runs the Bob Shell CLI once and returns Bob's answer. Exported for tests. */
 export async function runBob(input: string, options: BobRunOptions = {}): Promise<string> {
   const apiKey = process.env.BOBSHELL_API_KEY;
   if (!apiKey) {
@@ -73,15 +99,19 @@ export async function runBob(input: string, options: BobRunOptions = {}): Promis
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bps-bob-'));
 
   try {
-    // Project settings for this empty folder only: no built-in tools, no usage statistics.
-    fs.mkdirSync(path.join(workDir, '.bob'));
-    fs.writeFileSync(
-      path.join(workDir, '.bob', 'settings.json'),
-      JSON.stringify({ tools: { core: [] }, privacy: { usageStatisticsEnabled: false } })
-    );
-
     return await new Promise<string>((resolve, reject) => {
-      const child = spawn(command, ['--auth-method', 'api-key', '--hide-intermediary-output', '-p', INSTRUCTIONS], {
+      const args = [
+        'run',
+        '--format', 'json',
+        '--mode', 'ask',
+        '--disable-tool-groups', TOOL_GROUPS,
+        '--disable-mcp',
+        '--disable-subagents',
+        '--max-turns', '2',
+        '--max-cost', '1',
+        INSTRUCTIONS,
+      ];
+      const child = spawn(command, args, {
         cwd: workDir,
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -128,7 +158,14 @@ export async function runBob(input: string, options: BobRunOptions = {}): Promis
       });
 
       child.on('close', (code) => {
-        if (code === 0) return finish(() => resolve(out.trim()));
+        if (code === 0) {
+          const answer = parseBobResult(out);
+          if (answer === null) {
+            console.error('[AskBob] Bob Shell finished but its output had no usable result.');
+            return finish(() => reject(new ApiError(502, 'BOB_FAILED', 'Bob could not answer. Please try again.')));
+          }
+          return finish(() => resolve(answer));
+        }
         // Server-side log only. Never forwarded to the browser.
         console.error(`[AskBob] Bob Shell exited with code ${code}: ${errText.trim().slice(0, 300)}`);
         finish(() => reject(new ApiError(502, 'BOB_FAILED', 'Bob could not answer. Please try again.')));

@@ -1,7 +1,7 @@
 // Checks the "Ask Bob" box inside the preview pop-up.
 //
-//   Prereqs: API running with BOBSHELL_API_KEY + BOB_CLI_PATH pointing at a stand-in script (never the real
-//            Bob), sample drive seeded, and `npm run dev` here. Needs: npm install --no-save puppeteer-core
+//   Prereqs: API running with BOBSHELL_API_KEY in .env (calls the real Bob, ~$0.01-0.06 each), sample drive
+//            seeded, and `npm run dev` here. Needs: npm install --no-save puppeteer-core
 //   Run:     node e2e/ask-bob.mjs
 
 import { fileURLToPath } from 'node:url';
@@ -51,16 +51,23 @@ try {
   check('search-aware button is offered after a search', relateLabel.includes('Relate to my search'), relateLabel.join(' | '));
 
   await clickText('dialog [aria-label="Ask Bob"] button', 'Relate to my search');
-  await page.waitForSelector('[data-testid="bob-answer"]', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="bob-answer"]', { timeout: 150000 });
   const answer = await page.$eval('[data-testid="bob-answer"]', (e) => e.innerText);
-  check('answer is shown in the pop-up', answer.includes('Stand-in answer'), answer.slice(0, 40));
-  check('the search query reached the server', answer.includes('Northwind'), answer.replace(/\n/g, ' | ').slice(0, 120));
+  check('answer is shown in the pop-up', answer.trim().length > 20, answer.replace(/\n/g, ' | ').slice(0, 120));
   await page.screenshot({ path: `${OUT}/ask-bob-summary.png` });
 
   await page.type('dialog input[aria-label="Question for Bob"]', 'What is the contract value?');
   await page.keyboard.press('Enter');
-  await settle(1500);
-  check('typed question gets an answer', (await page.$('[data-testid="bob-answer"]')) !== null);
+  await page.waitForFunction(
+    (prev) => {
+      const t = document.querySelector('[data-testid="bob-answer"]')?.innerText ?? '';
+      return t !== prev && /4\.2/.test(t);
+    },
+    { timeout: 150000 },
+    answer,
+  ).catch(() => {});
+  const typed = await page.$eval('[data-testid="bob-answer"]', (e) => e.innerText).catch(() => '');
+  check('typed question gets the right answer', typed.includes('4.2'), typed.replace(/\n/g, ' | ').slice(0, 120));
 
   const noScripts = await page.$$eval('[data-testid="bob-answer"] script, [data-testid="bob-answer"] *', (n) => n.filter((x) => x.tagName === 'SCRIPT').length);
   check('answer is rendered as text only', noScripts === 0);
