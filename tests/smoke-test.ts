@@ -13,6 +13,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { zipSync } from 'fflate';
 import { extractPreview, previewToPlainText, PREVIEW_LIMITS } from '../src/preview/index.js';
 import { getDemoPreview, getLivePreview } from '../src/api/preview.js';
@@ -662,6 +664,48 @@ async function main() {
       fs.rmSync(sampleDrive, { recursive: true, force: true });
     }
   });
+
+  // Test 12: governance.json sidecar seeding (runs the built seed script against a throwaway DB and drive)
+  await runTest('12. Sample Drive Seeding: governance.json Sidecar', async () => {
+    const script = path.resolve('build/scripts/seed-sample-drive.js');
+    if (!fs.existsSync(script)) throw new Error('build/scripts/seed-sample-drive.js missing; run `npm run build` first');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bps-seed-'));
+    const src = path.join(root, 'src');
+    fs.mkdirSync(src);
+    fs.writeFileSync(path.join(src, 'Plan.txt'), 'Quarterly plan text');
+    fs.writeFileSync(path.join(src, 'Plain.txt'), 'No governance entry');
+    fs.writeFileSync(
+      path.join(src, 'governance.json'),
+      JSON.stringify({ 'Plan.txt': { owner: 'alice@bank.com', collaborators: ['bob@bank.com', 'not-an-email'], doNotDelete: true } }),
+    );
+    const run = (govText?: string) => {
+      if (govText !== undefined) fs.writeFileSync(path.join(src, 'governance.json'), govText);
+      const r = spawnSync(process.execPath, [script, src], {
+        env: { ...process.env, BOX_DB_PATH: path.join(root, 'seed.db'), BOX_SAMPLE_DRIVE: path.join(root, 'store') },
+        encoding: 'utf-8',
+      });
+      if (r.status !== 0) throw new Error(`seed script failed: ${r.stderr}`);
+    };
+    try {
+      run();
+      const db = new DatabaseSync(path.join(root, 'seed.db'));
+      const rows = db.prepare('SELECT name, owner_email, collaborators, content_preview FROM files ORDER BY name').all() as Array<Record<string, string>>;
+      db.close();
+      const plan = rows.find((r) => r.name === 'Plan.txt');
+      const plain = rows.find((r) => r.name === 'Plain.txt');
+      if (!plan || !plain) throw new Error('both files should be indexed');
+      if (plan.owner_email !== 'alice@bank.com') throw new Error('owner from sidecar');
+      if (plan.collaborators !== 'bob@bank.com') throw new Error('invalid collaborator email must be dropped');
+      if (!plan.content_preview.startsWith('[protected]')) throw new Error('doNotDelete must mark the record protected');
+      if (plain.owner_email !== 'you@sample.local' || plain.collaborators !== '') throw new Error('defaults without a sidecar entry');
+      if (!fs.existsSync(path.join(root, 'store', 'Plan.txt'))) throw new Error('file copied into the sample drive');
+      if (fs.existsSync(path.join(root, 'store', 'governance.json'))) throw new Error('sidecar must not be copied or indexed');
+      run('{ not json'); // a broken sidecar is ignored, not fatal
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 
   closeDatabase();
 
