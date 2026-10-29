@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/card';
 import { QueryError } from '@/components/states';
 import { askBob } from '@/services/askBobService';
-import { useMode } from '@/state/ModeContext';
 import { ApiRequestError } from '@/services/errors';
 
 const MAX_QUESTION = 500;
@@ -15,11 +14,10 @@ const MAX_QUESTION = 500;
  * The server reads the file and holds the Bob API key; nothing secret is on this page.
  */
 export function AskBob({ docId, searchQuery }: { docId: string; searchQuery?: string }) {
-  const { mode } = useMode();
   const [question, setQuestion] = useState('');
 
   const ask = useMutation({
-    mutationFn: (q: string) => askBob(mode, docId, q, searchQuery),
+    mutationFn: (q: string) => askBob(docId, q, searchQuery),
   });
 
   // A different file starts with a clean slate.
@@ -27,7 +25,7 @@ export function AskBob({ docId, searchQuery }: { docId: string; searchQuery?: st
     setQuestion('');
     ask.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docId, mode]);
+  }, [docId]);
 
   const submit = (q: string) => {
     const trimmed = q.trim();

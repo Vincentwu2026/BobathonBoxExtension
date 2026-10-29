@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, FileSearch, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/card';
 import { AskBob } from '@/components/AskBob';
 import { QueryError } from '@/components/states';
 import { getPreview } from '@/services/previewService';
-import { useMode } from '@/state/ModeContext';
+import { RetentionBadge } from '@/components/RetentionBadge';
 import { cn } from '@/lib/utils';
-import type { Preview, PreviewBlock, PreviewSheet, PreviewSlide } from '@/types';
+import type { DocumentItem, Preview, PreviewBlock, PreviewSheet, PreviewSlide } from '@/types';
 
 /**
  * Everything below renders extracted file content as React text nodes. There is no
@@ -200,21 +200,13 @@ function Body({ preview }: { preview: Preview }) {
 }
 
 /**
- * "Preview file" button plus a pop-up showing the whole file. The pop-up is a native modal
- * <dialog>: the browser traps focus, Escape closes it, and the page behind it is inert.
- * The file is only downloaded and parsed once the pop-up is opened.
+ * A pop-up showing the whole file, with the file's owner and deletion status on top and Ask Bob below.
+ * It is a native modal <dialog>: the browser traps focus, Escape closes it, and the page behind it is
+ * inert. The file is only downloaded and parsed while the pop-up is open.
  */
-export function PreviewPanel({ docId, fileName, searchQuery }: { docId: string; fileName: string; searchQuery?: string }) {
-  const { mode } = useMode();
-  const [open, setOpen] = useState(false);
-  const [requested, setRequested] = useState(false);
+export function PreviewDialog({ doc, searchQuery, onClose }: { doc: DocumentItem | null; searchQuery?: string; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-
-  // A different document starts closed.
-  useEffect(() => {
-    setOpen(false);
-    setRequested(false);
-  }, [docId, mode]);
+  const open = doc !== null;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -224,77 +216,65 @@ export function PreviewPanel({ docId, fileName, searchQuery }: { docId: string; 
   }, [open]);
 
   const query = useQuery({
-    queryKey: ['preview', mode, docId],
-    queryFn: () => getPreview(mode, docId),
-    enabled: requested,
+    queryKey: ['preview', doc?.id],
+    queryFn: () => getPreview(doc!.id),
+    enabled: open,
     staleTime: 60_000,
     retry: false,
   });
 
-  const preview = query.data?.data.preview;
+  const preview = query.data?.preview;
 
   return (
-    <div>
-      <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">File preview</h3>
-      <Button
-        variant="outline"
-        size="sm"
-        className="mt-2"
-        onClick={() => {
-          setRequested(true);
-          setOpen(true);
-        }}
-      >
-        <FileSearch className="h-4 w-4" aria-hidden="true" />
-        Preview file
-      </Button>
-
-      <dialog
-        ref={dialogRef}
-        onClose={() => setOpen(false)}
-        // A click on the backdrop targets the <dialog> element itself, not its content.
-        onClick={(e) => {
-          if (e.target === dialogRef.current) setOpen(false);
-        }}
-        aria-labelledby="preview-title"
-        className="m-auto h-[88vh] w-[min(1000px,94vw)] rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-black/50"
-      >
-        {open && (
-          <div className="flex h-full flex-col">
-            <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-3">
+    <dialog
+      ref={dialogRef}
+      onClose={onClose}
+      // A click on the backdrop targets the <dialog> element itself, not its content.
+      onClick={(e) => {
+        if (e.target === dialogRef.current) onClose();
+      }}
+      aria-labelledby="preview-title"
+      className="m-auto h-[88vh] w-[min(1000px,94vw)] rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-black/50"
+    >
+      {doc && (
+        <div className="flex h-full flex-col">
+          <header className="border-b border-border px-5 py-3">
+            <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <h2 id="preview-title" className="break-words text-base font-semibold">
-                  {fileName}
+                  {doc.name}
                 </h2>
-                {preview && preview.kind !== 'unavailable' && (
-                  <p className="text-xs text-muted-foreground">{FORMAT_LABEL[preview.format]}</p>
-                )}
+                <p className="text-xs text-muted-foreground">
+                  {preview && preview.kind !== 'unavailable' ? `${FORMAT_LABEL[preview.format]} · ` : ''}Owner: {doc.owner}
+                </p>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="Close preview">
+              <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
                 <X className="h-4 w-4" aria-hidden="true" />
               </Button>
-            </header>
-
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4" data-testid="preview-body">
-              {query.isPending && (
-                <div className="space-y-2" role="status" aria-label="Loading preview">
-                  <Skeleton className="h-4 w-2/3" />
-                  <Skeleton className="h-4 w-full" />
-                  <Skeleton className="h-4 w-5/6" />
-                </div>
-              )}
-              {query.isError && <QueryError error={query.error} />}
-              {preview && <Body preview={preview} />}
-              {preview && preview.kind !== 'unavailable' && preview.truncated && (
-                <p className="mt-3 text-xs text-muted-foreground">
-                  This is a shortened view of a very large file. Open the file in Box to see everything.
-                </p>
-              )}
-              <AskBob docId={docId} searchQuery={searchQuery} />
             </div>
+            <p className="mt-2 flex flex-wrap items-center gap-2 text-sm" data-testid="retention-line">
+              <RetentionBadge status={doc.retention.status} />
+              <span className="text-muted-foreground">{doc.retention.explanation}</span>
+            </p>
+          </header>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4" data-testid="preview-body">
+            {query.isPending && (
+              <div className="space-y-2" role="status" aria-label="Loading preview">
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-5/6" />
+              </div>
+            )}
+            {query.isError && <QueryError error={query.error} />}
+            {preview && <Body preview={preview} />}
+            {preview && preview.kind !== 'unavailable' && preview.truncated && (
+              <p className="mt-3 text-xs text-muted-foreground">This is a shortened view of a very large file.</p>
+            )}
+            <AskBob docId={doc.id} searchQuery={searchQuery} />
           </div>
-        )}
-      </dialog>
-    </div>
+        </div>
+      )}
+    </dialog>
   );
 }

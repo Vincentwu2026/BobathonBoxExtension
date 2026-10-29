@@ -10,7 +10,7 @@ import type { CollaboratorDTO, DocumentDTO } from './dto.js';
 import { buildRetention, departmentFromPath } from './retention-view.js';
 
 /**
- * Records created by scripts/seed-demo-data.ts use IDs 9000000001+. Filtering on the
+ * Records created by src/demo/seed-files.ts use IDs 9000000101+. Filtering on the
  * prefix keeps smoke-test fixtures and any real crawled files out of the demo.
  */
 export const DEMO_ID_PREFIX = '9000000';

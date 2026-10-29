@@ -92,7 +92,7 @@ export async function handleDemoRetentionCheck(args: z.infer<z.ZodObject<typeof 
     const result = evaluateDemoRetention(args.fileId);
     if (!result) {
       return formatError(
-        `No file with ID '${args.fileId}' in the seeded demo index. Run 'npm run seed-demo' and use an ID from index_search results.`
+        `No file with ID '${args.fileId}' in the seeded demo index. Start the web API (npm run web-api) to load the demo files, and use an ID from index_search results.`
       );
     }
     return formatSuccess(result);

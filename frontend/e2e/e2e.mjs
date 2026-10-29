@@ -1,12 +1,9 @@
-// End-to-end check of the web UI in a real (headless) Chrome.
+// End-to-end check of the simplified UI in a real (headless) Chrome: two tabs, 8 demo files,
+// search, pop-up preview with deletion status, and Ask Bob.
 //
 //   Prereqs: API running (npm run web-api in the repo root) and `npm run dev` here.
-//   Run:     node e2e/e2e.mjs
-//
-// Needs puppeteer-core, which is intentionally NOT a dependency of the app:
-//   npm install --no-save puppeteer-core
-//
-// Set CHROME_PATH if Chrome is not in the default macOS location.
+//            Needs: npm install --no-save puppeteer-core
+//   Run:     node e2e/e2e.mjs            (add ASK_BOB=1 to also make one real Bob call, ~$0.01-0.06)
 
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
@@ -20,183 +17,103 @@ const check = (name, ok, extra = '') => {
   results.push(ok);
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  [' + extra + ']' : ''}`);
 };
+const settle = (ms = 500) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new' });
 const page = await browser.newPage();
-await page.setViewport({ width: 1440, height: 900 });
+await page.setViewport({ width: 1100, height: 900 });
+const errors = [];
+page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message));
 
-const consoleErrors = [];
-page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
-page.on('pageerror', (e) => consoleErrors.push('PAGEERROR ' + e.message));
-
-const text = () => page.evaluate(() => document.body.innerText);
 const clickText = async (sel, label) => {
-  const handle = await page.evaluateHandle((s, l) => [...document.querySelectorAll(s)].find((e) => e.textContent.trim().includes(l)), sel, label);
-  const el = handle.asElement();
+  const h = await page.evaluateHandle((s, l) => [...document.querySelectorAll(s)].find((e) => e.textContent.trim().includes(l)), sel, label);
+  const el = h.asElement();
   if (!el) throw new Error(`no ${sel} containing "${label}"`);
   await el.click();
 };
-const settle = (ms = 700) => new Promise((r) => setTimeout(r, ms));
-const run = async (name, fn) => {
-  try { await fn(); } catch (e) { check(`${name} (script error)`, false, e.message); }
-};
+const bodyText = () => page.evaluate(() => document.body.innerText);
 
-// ---------- Search (demo)
-await page.goto(`${BASE}/search`, { waitUntil: 'networkidle0' });
-await page.evaluate(() => localStorage.clear());
-await page.reload({ waitUntil: 'networkidle0' });
-let t = await text();
-check('header + title render', t.includes('Box Productivity Suite'));
-check('defaults to DEMO mode (works with no credentials)', await page.$eval('[aria-pressed="true"]', (e) => e.textContent.includes('DEMO')));
-check('all 5 nav items', ['Search', 'Folder Explorer', 'Retention Center', 'Audit Logs', 'System Status'].every((n) => t.includes(n)));
+try {
+  await page.goto(BASE, { waitUntil: 'networkidle0' });
 
-for (const [q, expectName] of [['revenue', 'Revenue'], ['ARR', 'ARR_Waterfall'], ['mainframe', 'Mainframe'], ['compliance', 'Compliance'], ['AI', 'AI_Governance'], ['customer escalation', 'Customer_Escalation']]) {
-  await run(`search ${q}`, async () => {
-    await clickText('button', q); await settle();
-    t = await text();
-    const rows = await page.$$eval('tbody tr', (r) => r.length);
-    check(`search "${q}"`, rows > 0 && t.includes(expectName), `${rows} rows`);
-  });
+  const tabs = await page.$$eval('[role="tab"]', (t) => t.map((x) => x.textContent.trim()));
+  check('exactly two sections', tabs.length === 2 && tabs.includes('Demo files') && tabs.includes('My Box'), tabs.join(' | '));
+  check('no side menu or mode switch', (await page.$('nav')) === null && !/LIVE BOX|DEMO MODE/.test(await bodyText()));
+
+  // Demo files tab is the default.
+  const rows = await page.$$eval('main ul li', (l) => l.length);
+  check('demo tab lists 8 files', rows === 8, `${rows} files`);
+  const names = await page.$$eval('main ul li button', (b) => b.map((x) => x.innerText));
+  const protectedCount = names.filter((n) => /\bProtected\b/.test(n)).length;
+  check('each file shows a Protected / Unprotected badge', names.every((n) => /Protected|Unprotected/.test(n)) && protectedCount > 0 && protectedCount < 8, `${protectedCount} protected`);
+  await page.screenshot({ path: `${OUT}/ui-demo.png` });
+
+  // Search inside files.
+  await page.type('input[aria-label="Search files"]', 'renewal');
+  await page.keyboard.press('Enter');
+  await settle(800);
+  const found = await page.$$eval('main ul li', (l) => l.length);
+  check('search finds words inside files', found === 2, `${found} results`);
+  check('matched words are highlighted', (await page.$$('main ul li mark')).length > 0);
+  await page.screenshot({ path: `${OUT}/ui-search.png` });
+
+  // Open a file in the pop-up.
+  await clickText('main ul li button', 'Northwind_Account_Plan');
+  await page.waitForSelector('[data-testid="preview-body"]', { timeout: 5000 });
+  await settle(600);
+  const dlg = await page.$eval('dialog', (d) => ({ modal: d.open && d.matches(':modal'), text: d.innerText }));
+  check('file opens as a pop-up', dlg.modal);
+  check('pop-up shows the whole file', dlg.text.includes('Total contract value') && dlg.text.includes('At risk'));
+  check('pop-up shows owner and deletion status', dlg.text.includes('priya.nair@example.com') && /Protected/.test(dlg.text) && /blocked/i.test(dlg.text));
+  check('pop-up has an Ask Bob box', (await page.$('dialog [aria-label="Ask Bob"]')) !== null);
+  await page.screenshot({ path: `${OUT}/ui-popup.png` });
+
+  if (process.env.ASK_BOB) {
+    await clickText('dialog [aria-label="Ask Bob"] button', 'Relate to my search');
+    await page.waitForSelector('[data-testid="bob-answer"]', { timeout: 150000 });
+    const answer = await page.$eval('[data-testid="bob-answer"]', (e) => e.innerText);
+    check('Ask Bob answers in the pop-up', answer.trim().length > 20, answer.replace(/\n/g, ' ').slice(0, 100));
+    await page.screenshot({ path: `${OUT}/ui-ask-bob.png` });
+  }
+
+  await page.keyboard.press('Escape');
+  await settle(200);
+  check('Escape closes the pop-up', await page.$eval('dialog', (d) => !d.open));
+
+  // The other file types open too.
+  for (const [name, expect] of [['Product_Roadmap', 'Product Roadmap FY27'], ['Q4_Revenue_Forecast', 'EMEA'], ['Q4_Planning_Meeting', 'Action items'], ['Team_Offsite', 'Escape room']]) {
+    // "Show all" only exists while a search is active.
+    if (await page.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Show all')))) {
+      await clickText('button', 'Show all');
+      await settle(600);
+    }
+    await clickText('main ul li button', name);
+    await page.waitForSelector('[data-testid="preview-body"]', { timeout: 5000 });
+    await settle(500);
+    const t = await page.$eval('[data-testid="preview-body"]', (e) => e.innerText);
+    check(`${name} opens`, t.includes(expect), t.slice(0, 40).replace(/\n/g, ' '));
+    await page.keyboard.press('Escape');
+    await settle(200);
+  }
+
+  // My Box tab.
+  await clickText('[role="tab"]', 'My Box');
+  await settle(300);
+  const box = await bodyText();
+  check('My Box explains it is waiting for approval', /waiting for approval/i.test(box));
+  check('My Box has no token field', (await page.$('input[type="password"]')) === null);
+  await page.screenshot({ path: `${OUT}/ui-mybox.png` });
+  await clickText('main button', 'Open the demo files');
+  await settle(500);
+  check('button returns to the demo files', (await page.$$eval('main ul li', (l) => l.length)) === 8);
+} catch (e) {
+  check('script error', false, e.message);
+  await page.screenshot({ path: `${OUT}/ui-error.png` });
 }
-await page.screenshot({ path: `${OUT}/1-search.png` });
 
-await run('detail panel', async () => {
-  await clickText('table button', 'Customer_Escalation_Log'); await settle(300);
-  t = await text();
-  check('document panel: owner / collaborators / retention', t.includes('sofia.alvarez@') && t.toLowerCase().includes('collaborators (2)') && t.includes('Retention:'));
-  const marks = await page.$$eval('mark', (m) => m.length);
-  check('snippet highlighting is real <mark> elements', marks > 0, `${marks} marks`);
-  await page.screenshot({ path: `${OUT}/2-search-detail.png` });
-});
-
-// ---------- Explorer (demo)
-await run('explorer demo', async () => {
-  await clickText('a', 'Folder Explorer'); await settle(300);
-  check('Connect Folder disabled in demo mode', await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Connect Folder')).disabled));
-  await clickText('button', 'Load Demo Folder'); await settle();
-  t = await text();
-  check('demo tree shows all six departments', ['Finance', 'HR', 'Sales', 'Mainframe Modernization', 'Customer Success', 'AI Governance'].every((d) => t.includes(d)));
-  check('tree reports 17 files', t.includes('17 files'));
-  await page.screenshot({ path: `${OUT}/3-explorer.png` });
-});
-
-// ---------- Retention (demo)
-await run('retention', async () => {
-  await clickText('a', 'Retention Center'); await settle();
-  await clickText('li button', 'FY26_Q4_Revenue'); await settle(300);
-  t = await text();
-  check('retention: Protected TRUE + active collaborators reason', t.includes('TRUE') && t.includes('Active collaborators'));
-  await clickText('button', 'Attempt Delete'); await settle();
-  t = await text();
-  check('delete blocked banner', t.includes('Deletion Blocked') && t.includes('Active collaborators detected'));
-  await page.screenshot({ path: `${OUT}/4-retention-blocked.png` });
-  await clickText('li button', 'Scratch_Pipeline'); await settle(300);
-  await clickText('button', 'Attempt Delete'); await settle();
-  t = await text();
-  check('delete allowed banner (unprotected file)', t.includes('Deletion Allowed') && t.includes('not deleted'));
-  await clickText('li button', 'Board_Minutes'); await settle(300);
-  t = await text();
-  check('do_not_delete marker file shows tag reason', t.includes('do_not_delete tag') && t.includes('Yes'));
-});
-
-// ---------- Audit
-await run('audit', async () => {
-  await clickText('a', 'Audit Logs'); await settle(900);
-  t = await text();
-  check('audit shows attempts just made', t.includes('Scratch_Pipeline_Sync_Notes.txt') && t.includes('Allowed'));
-  await clickText('button', 'Blocked'); await settle(300);
-  const rowsB = await page.$$eval('tbody tr', (r) => r.map((x) => x.textContent));
-  check('filter "blocked" shows only blocked', rowsB.length > 0 && rowsB.every((r) => r.includes('Blocked')), `${rowsB.length} rows`);
-  await clickText('button', 'Allowed'); await settle(300);
-  const rowsA = await page.$$eval('tbody tr', (r) => r.map((x) => x.textContent));
-  check('filter "allowed" shows only allowed', rowsA.length > 0 && rowsA.every((r) => r.includes('Allowed')), `${rowsA.length} rows`);
-  await clickText('button', 'All'); await settle(300);
-  await page.screenshot({ path: `${OUT}/5-audit.png` });
-});
-
-// ---------- Status
-await run('status', async () => {
-  await clickText('a', 'System Status'); await settle(1500);
-  t = await text();
-  check('status: MCP / Box pending / index / DB / retention', t.includes('MCP tools registered') && t.includes('Box authentication pending') && t.includes('Search index online') && t.includes('SQLite database online') && t.includes('Retention engine active'));
-  await page.screenshot({ path: `${OUT}/6-status.png` });
-});
-
-// ---------- LIVE mode graceful failure
-await run('live', async () => {
-  await clickText('button', 'LIVE BOX'); await settle(300);
-  await clickText('a', 'Folder Explorer'); await settle(300);
-  await page.type('#folder-id', '414969397645');
-  await clickText('button', 'Connect Folder'); await settle(1500);
-  t = await text();
-  check('live: unavailable message shown, no crash', t.includes('Live Box connection unavailable.') && t.includes('Please switch to Demo Mode.'));
-  await page.screenshot({ path: `${OUT}/7-live-unavailable.png` });
-  await clickText('button', 'Switch to Demo Mode'); await settle(400);
-  check('"Switch to Demo Mode" flips the mode', await page.$eval('[aria-pressed="true"]', (e) => e.textContent.includes('DEMO')));
-
-  await clickText('button', 'LIVE BOX'); await settle(200);
-  await page.$eval('#folder-id', (e) => { e.value = ''; });
-  await page.type('#folder-id', 'abc');
-  await clickText('button', 'Connect Folder'); await settle(300);
-  check('invalid folder id rejected client-side', (await text()).includes('Folder ID must be numeric'));
-
-  await clickText('a', 'Search'); await settle(300);
-  await page.type('input[aria-label="Search query"]', 'revenue'); await page.keyboard.press('Enter'); await settle(1500);
-  check('live search: unavailable message', (await text()).includes('Live Box connection unavailable.'));
-
-  // ---- Connect to Box (token entered on the website)
-  check('connect bar visible in LIVE mode', !!(await page.$('[data-testid="connect-bar"]')));
-  check('token field is a password input', (await page.$eval('#box-token', (e) => e.type)) === 'password');
-  await clickText('button', 'Connect to Box'); await settle(300);
-  check('empty token rejected client-side', (await text()).includes('Paste the full developer token'));
-  await page.type('#box-token', 'FAKE_E2E_TOKEN_1234567890');
-  await clickText('button', 'Connect to Box'); await settle(2500);
-  t = await text();
-  check('rejected token: clear message, still disconnected', t.includes('Box did not accept that token') && !t.includes('Connected to Box as'));
-  check('token is never echoed back into the page text', !t.includes('FAKE_E2E_TOKEN_1234567890'));
-  const stored = await page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }) + document.cookie);
-  check('token never written to browser storage or cookies', !stored.includes('FAKE_E2E_TOKEN'));
-  await page.screenshot({ path: `${OUT}/10-connect-rejected.png` });
-  await clickText('button', 'DEMO MODE'); await settle(200);
-  check('connect bar hidden in DEMO mode', !(await page.$('[data-testid="connect-bar"]')));
-
-});
-
-// ---------- API down => demo still works from bundled data
-await run('api down', async () => {
-  await page.setRequestInterception(true);
-  page.on('request', (r) => (r.url().includes('/api/') ? r.abort() : r.continue()));
-  await clickText('button', 'DEMO MODE'); await settle(200);
-  await page.$eval('input[aria-label="Search query"]', (e) => { e.value = ''; });
-  await page.type('input[aria-label="Search query"]', 'mainframe'); await page.keyboard.press('Enter'); await settle(1500);
-  t = await text();
-  check('API down: demo search works from bundled data', t.includes('Mainframe_') && t.includes('Backend API not running'));
-  await clickText('a', 'Retention Center'); await settle(900);
-  await clickText('li button', 'FY26_Q4_Revenue'); await settle(300);
-  await clickText('button', 'Attempt Delete'); await settle(600);
-  check('API down: simulated delete still blocked', (await text()).includes('Deletion Blocked'));
-  await clickText('a', 'System Status'); await settle(500);
-  // The status query is cached for 15s, so force a refetch to exercise the API-down path.
-  await clickText('button', 'Refresh'); await settle(1500);
-  check('API down: status page degrades gracefully', (await text()).includes('Backend API not reachable'));
-  await page.screenshot({ path: `${OUT}/8-api-down-status.png` });
-  await page.setRequestInterception(false);
-});
-
-// ---------- responsive
-await run('mobile', async () => {
-  const mobile = await browser.newPage();
-  await mobile.setViewport({ width: 390, height: 844 });
-  await mobile.goto(`${BASE}/search`, { waitUntil: 'networkidle0' });
-  const overflow = await mobile.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
-  check('mobile 390px: no horizontal page overflow', !overflow);
-  await mobile.screenshot({ path: `${OUT}/9-mobile.png` });
-});
-
-const realErrors = consoleErrors.filter((e) => !/Failed to load resource|net::ERR_FAILED|503|ERR_BLOCKED/i.test(e));
-check('no unexpected console/page errors', realErrors.length === 0, realErrors.slice(0, 3).join(' | '));
-
+check('no console errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 await browser.close();
 const failed = results.filter((r) => !r).length;
-console.log(`\n${results.length - failed}/${results.length} checks passed`);
+console.log(failed ? `\n${failed} FAILED` : `\nAll ${results.length} checks passed`);
 process.exit(failed ? 1 : 0);

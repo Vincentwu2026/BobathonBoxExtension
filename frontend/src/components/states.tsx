@@ -1,9 +1,7 @@
 import type { ReactNode } from 'react';
-import { Info, TriangleAlert } from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
 import { Skeleton } from '@/components/ui/card';
-import { LiveUnavailable } from '@/components/LiveUnavailable';
-import { isLiveUnavailable, userMessage } from '@/services/errors';
-import type { DataSource } from '@/types';
+import { userMessage } from '@/services/errors';
 
 export function LoadingRows({ rows = 4 }: { rows?: number }) {
   return (
@@ -15,9 +13,8 @@ export function LoadingRows({ rows = 4 }: { rows?: number }) {
   );
 }
 
-/** Standard rendering for a failed query: Live-unavailable gets the dedicated banner. */
+/** Standard rendering for a failed query. */
 export function QueryError({ error }: { error: unknown }) {
-  if (isLiveUnavailable(error)) return <LiveUnavailable />;
   return (
     <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
       <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
@@ -32,26 +29,5 @@ export function EmptyState({ title, children }: { title: string; children?: Reac
       <p className="font-medium">{title}</p>
       {children && <div className="mt-1 text-sm text-muted-foreground">{children}</div>}
     </div>
-  );
-}
-
-export function PageHeader({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="mb-5">
-      <h2 className="text-xl font-bold tracking-tight">{title}</h2>
-      <p className="text-sm text-muted-foreground">{description}</p>
-    </div>
-  );
-}
-
-/** Tells the audience when Demo Mode is running from the bundled copy instead of the SQLite-backed API. */
-export function SourceNote({ source }: { source: DataSource | undefined }) {
-  if (source !== 'bundled') return null;
-  return (
-    <p className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-      <Info className="h-3.5 w-3.5" aria-hidden="true" />
-      Backend API not running: using the seeded data bundled with the app. Start it with <code>npm run web-api</code> to query the
-      real SQLite index.
-    </p>
   );
 }

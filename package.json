@@ -13,7 +13,6 @@
     "test": "tsc -p tsconfig.tests.json && node build/tests/smoke-test.js",
     "get-tokens": "node build/scripts/get-tokens.js",
     "schedule-crawl": "node build/scripts/schedule-crawl.js",
-    "seed-demo": "node build/scripts/seed-demo-data.js",
     "seed-sample-drive": "node build/scripts/seed-sample-drive.js",
     "demo-server": "node build/demo/index.js",
     "web-api": "node build/api/server.js",

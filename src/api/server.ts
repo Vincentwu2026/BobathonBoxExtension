@@ -11,6 +11,7 @@
  *  - The UI can never delete from Box: delete attempts are dry runs.
  */
 
+import fs from 'node:fs';
 import http from 'node:http';
 import { URL } from 'node:url';
 import { closeDatabase, getDatabase } from '../indexer/schema.js';
@@ -19,7 +20,8 @@ import { listDemoDocuments, searchDemoDocuments, DEMO_ID_PREFIX } from './demo.j
 import { getLiveDocument, getLiveFolder, liveDeleteAttempt, searchLive, assertBoxId } from './live.js';
 import { logDemoDeleteAttempt, readDemoAudit, readLiveAudit, ensureDemoAuditSeed } from './audit.js';
 import { getSystemStatus } from './status.js';
-import { getDemoPreview, getLivePreview } from './preview.js';
+import { getDemoPreview, getLivePreview, sampleDriveDir } from './preview.js';
+import { seedSampleFiles } from '../demo/seed-files.js';
 import { MAX_QUESTION_CHARS, MAX_SEARCH_QUERY_CHARS, askBobAboutDocument } from './ask-bob.js';
 import type { DeleteAttemptDTO, DocumentDTO } from './dto.js';
 import { evaluateDemoRetention } from '../demo/demo-retention.js';
@@ -221,9 +223,25 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   throw new ApiError(404, 'NOT_FOUND', 'Unknown route.');
 }
 
+/** Indexes the demo files folder (local SQLite only) so Demo Mode works with no extra setup step. */
+function loadDemoFiles(): void {
+  const dir = sampleDriveDir();
+  if (!fs.existsSync(dir)) {
+    console.error(`[WebApi] Demo files folder not found (${dir}); Demo Mode will be empty.`);
+    return;
+  }
+  try {
+    const n = seedSampleFiles(dir, dir);
+    console.error(`[WebApi] Loaded ${n} demo file(s) from ${dir}`);
+  } catch (err) {
+    console.error('[WebApi] Could not load the demo files:', err instanceof Error ? err.message : 'unknown error');
+  }
+}
+
 function main(): void {
   // Fail fast if the database cannot be opened, and make sure the demo audit trail exists.
   getDatabase();
+  loadDemoFiles();
   ensureDemoAuditSeed();
 
   const server = http.createServer((req, res) => {

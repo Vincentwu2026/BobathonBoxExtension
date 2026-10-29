@@ -1,0 +1,38 @@
+{
+  "Q4_Planning_Meeting.boxnote": {
+    "owner": "priya.nair@example.com",
+    "collaborators": [
+      "marcus.webb@example.com",
+      "elena.rossi@example.com"
+    ]
+  },
+  "Northwind_Account_Plan.docx": {
+    "owner": "priya.nair@example.com",
+    "collaborators": [
+      "marcus.webb@example.com"
+    ]
+  },
+  "Q4_Revenue_Forecast.xlsx": {
+    "owner": "elena.rossi@example.com",
+    "collaborators": [
+      "priya.nair@example.com"
+    ]
+  },
+  "Product_Roadmap.pptx": {
+    "owner": "marcus.webb@example.com",
+    "doNotDelete": true
+  },
+  "Vendor_Contract_Summary.docx": {
+    "owner": "elena.rossi@example.com",
+    "doNotDelete": true
+  },
+  "Customer_Feedback_Survey.xlsx": {
+    "owner": "marcus.webb@example.com"
+  },
+  "Security_Training.pptx": {
+    "owner": "elena.rossi@example.com"
+  },
+  "Team_Offsite_Ideas.txt": {
+    "owner": "priya.nair@example.com"
+  }
+}

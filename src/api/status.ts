@@ -95,7 +95,7 @@ function indexStatus(): ComponentStatusDTO[] {
         label: 'Search Index',
         state: total > 0 ? 'ok' : 'warn',
         headline: total > 0 ? 'Search index online' : 'Search index is empty',
-        detail: `${total} documents indexed (${demo} seeded demo documents). Run "npm run seed-demo" to load demo data.`,
+        detail: `${total} documents indexed (${demo} seeded demo documents). Start the web API from the project folder to load the demo files.`,
       },
       {
         key: 'database',

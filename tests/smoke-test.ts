@@ -700,6 +700,16 @@ async function main() {
       if (plain.owner_email !== 'you@sample.local' || plain.collaborators !== '') throw new Error('defaults without a sidecar entry');
       if (!fs.existsSync(path.join(root, 'store', 'Plan.txt'))) throw new Error('file copied into the sample drive');
       if (fs.existsSync(path.join(root, 'store', 'governance.json'))) throw new Error('sidecar must not be copied or indexed');
+      // Re-seeding drops demo records for files that are gone, including the old bundled dataset (9000000001+).
+      const db2 = new DatabaseSync(path.join(root, 'seed.db'));
+      db2.prepare("INSERT INTO files (box_id, name, path, owner_email, collaborators, content_preview, last_modified, indexed_at) VALUES ('9000000005', 'old.pdf', '/old.pdf', 'x@y.z', '', '', '', '')").run();
+      db2.close();
+      fs.rmSync(path.join(src, 'Plain.txt'));
+      run();
+      const db3 = new DatabaseSync(path.join(root, 'seed.db'));
+      const left = (db3.prepare('SELECT name FROM files ORDER BY name').all() as Array<{ name: string }>).map((r) => r.name);
+      db3.close();
+      if (left.join(',') !== 'Plan.txt') throw new Error(`stale demo records must be removed, got: ${left.join(',')}`);
       run('{ not json'); // a broken sidecar is ignored, not fatal
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

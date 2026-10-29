@@ -1,24 +1,13 @@
 import { apiGet } from '@/lib/http';
-import { demoCall, liveCall, type Result } from '@/services/shared';
-import { offlineSearch } from '@/services/offlineDemo';
-import type { DocumentItem, Mode } from '@/types';
+import type { DocumentItem } from '@/types';
 
-interface SearchResponse {
-  query: string;
-  results: DocumentItem[];
+/** Every demo file. */
+export async function listDocuments(): Promise<DocumentItem[]> {
+  return (await apiGet<{ documents: DocumentItem[] }>('/demo/documents')).documents;
 }
 
-export async function searchDocuments(mode: Mode, query: string, limit = 20): Promise<Result<DocumentItem[]>> {
-  const q = encodeURIComponent(query.trim());
-  const path = `/${mode}/search?q=${q}&limit=${limit}`;
-
-  if (mode === 'live') {
-    const r = await liveCall(() => apiGet<SearchResponse>(path));
-    return { data: r.data.results, source: r.source };
-  }
-  const r = await demoCall(
-    () => apiGet<SearchResponse>(path),
-    () => ({ query, results: offlineSearch(query, limit) })
-  );
-  return { data: r.data.results, source: r.source };
+/** Full-text search over the demo files (SQLite FTS5), best match first. */
+export async function searchDocuments(query: string): Promise<DocumentItem[]> {
+  const r = await apiGet<{ results: DocumentItem[] }>(`/demo/search?q=${encodeURIComponent(query.trim())}&limit=20`);
+  return r.results;
 }

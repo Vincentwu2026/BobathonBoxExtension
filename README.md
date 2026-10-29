@@ -45,7 +45,7 @@ Enterprise AI backend platform integrating **Box Enterprise** with the **Model C
    Enforces strict enterprise data preservation rules. Deletion is automatically refused if a file has **one or more active collaborators** or has an explicit **`do_not_delete` retention tag**. No unconstrained raw deletion tool is exposed.
 
 4. **Web UI & Local API** (additive; the MCP server is unchanged):
-   A React frontend ([`frontend/`](frontend/README.md)) backed by a localhost-only HTTP API (`src/api/server.ts`, `127.0.0.1:8799`). It offers search, a folder explorer, a retention center, audit logs and system status, in **Demo Mode** (seeded fictional data, no credentials) or **Live Box** mode. "Attempt Delete" in the UI is always a dry run.
+   A React frontend ([`frontend/`](frontend/README.md)) backed by a localhost-only HTTP API (`src/api/server.ts`, `127.0.0.1:8799`). One simple page with two tabs: **Demo files** (8 sample documents that work with no credentials: search inside them, open one in a pop-up, see whether it can be deleted, ask Bob about it) and **My Box** (shows that your own files are waiting for Box admin approval).
 
 ---
 
@@ -74,7 +74,7 @@ Enterprise AI backend platform integrating **Box Enterprise** with the **Model C
 ├── scripts/
 │   ├── get-tokens.ts             # CLI tool to exchange JWT credentials for tokens
 │   ├── schedule-crawl.ts         # Periodic indexing daemon / cron script
-│   └── seed-demo-data.ts         # Seeds 17 fictional documents into the SQLite index
+│   └── make-demo-files.py        # Generates the 8 documents in demo-files/
 ├── frontend/                     # React + Vite + Tailwind web UI (see frontend/README.md)
 ├── docs/
 │   ├── retention-policy.md       # Detailed enterprise retention rules & specs
@@ -135,7 +135,7 @@ Create your environment configuration (or export variables in your shell):
 | `BOBSHELL_API_KEY` | Bob API key (scope **Inference**) used by "Ask Bob". Put it in `./.env`, never in code | Optional; Ask Bob is off without it |
 | `BOB_CLI_PATH` | Path to the Bob Shell executable | Default: `bob` on `PATH` |
 | `BOX_INDEX_CONTENT` | Set to `false` to stop the crawler downloading files to index their text | Default: on |
-| `BOX_SAMPLE_DRIVE` | Folder of local sample files used for Demo Mode file previews | Default: `./data/sample-drive` |
+| `BOX_SAMPLE_DRIVE` | Folder of demo files the API loads and previews | Default: `./demo-files` |
 
 ---
 
@@ -337,29 +337,21 @@ Retrieve recent audit log entries for compliance and verification.
 ## Running the Web UI
 
 ```bash
-npm run seed-demo      # load 17 fictional demo documents into the SQLite index
 npm run build
-npm run web-api        # API on http://127.0.0.1:8799
+npm run web-api        # API on http://127.0.0.1:8799; loads the 8 files in demo-files/ by itself
 
 cd frontend && npm install && npm run dev   # UI on http://127.0.0.1:5173
 ```
 
-See [`frontend/README.md`](frontend/README.md) for modes, pages, safety properties and configuration.
+See [`frontend/README.md`](frontend/README.md) for the page layout, safety properties and configuration.
 
 ### File preview
 
-Opening a document shows a **Preview file** button that renders the file's content in the page: Box Notes (`.boxnote`), Word (`.docx`), PowerPoint (`.pptx`), Excel (`.xlsx`) and plain text. PDF and legacy `.doc`/`.ppt`/`.xls` are not supported and say so. Extracted text is always rendered as text, never as HTML, and parsing is bounded (file size, zip entry sizes, blocks, slides, sheets, rows and columns).
+Clicking a file opens a pop-up that renders its whole content: Box Notes (`.boxnote`), Word (`.docx`), PowerPoint (`.pptx`), Excel (`.xlsx`) and plain text. PDF and legacy `.doc`/`.ppt`/`.xls` are not supported and say so. Extracted text is always rendered as text, never as HTML, and parsing is bounded (file size, zip entry sizes, blocks, slides, sheets, rows and columns).
 
-- **Live Mode** downloads the file from Box on demand, read-only, after checking its type and size.
-- **Demo Mode** reads from a local folder, so you can try real files without Box access:
+The 8 demo documents live in [`demo-files/`](demo-files) (Word, PowerPoint, Excel, a Box Note and a text file, all made-up) and the API indexes them every time it starts. The pop-up also shows the owner and whether the file could be deleted. The API still has a read-only path that downloads a file from Box on demand, ready for when the Box app is approved; the website does not use it yet.
 
-```bash
-npm run build
-npm run seed-sample-drive -- /path/to/your/files     # copies supported files into the sample drive and indexes their text
-BOX_SAMPLE_DRIVE=./data/sample-drive npm run web-api
-```
-
-To give local files an owner, collaborators or a do-not-delete flag (so the Retention Center has something to evaluate), put a `governance.json` next to them:
+To use your own files instead, point the API at another folder (`BOX_SAMPLE_DRIVE=/path/to/files npm run web-api`), or copy them in with `npm run seed-sample-drive -- /path/to/files`. To give files an owner, collaborators or a do-not-delete flag, put a `governance.json` next to them:
 
 ```json
 { "Plan.docx": { "owner": "me@example.com", "collaborators": ["a@example.com"], "doNotDelete": true } }

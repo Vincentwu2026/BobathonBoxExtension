@@ -1,8 +1,8 @@
 /**
  * File previews for the web UI.
  *
- *  - Demo Mode reads a file from the local sample-drive folder (BOX_SAMPLE_DRIVE, default
- *    ./data/sample-drive), matched by the file name stored in the seeded index.
+ *  - Demo Mode reads a file from the demo folder (BOX_SAMPLE_DRIVE, default ./demo-files),
+ *    matched by the file name stored in the seeded index.
  *  - Live Mode downloads the file from Box on demand, read-only and size-capped.
  *
  * Neither path writes anything, and neither ever deletes. Extraction itself lives in
@@ -23,7 +23,7 @@ import { assertBoxId } from './live.js';
 const TOO_LARGE = 'This file is too large to preview. Open the file in Box to view it.';
 
 export function sampleDriveDir(): string {
-  return path.resolve(process.env.BOX_SAMPLE_DRIVE || path.join(process.cwd(), 'data', 'sample-drive'));
+  return path.resolve(process.env.BOX_SAMPLE_DRIVE || path.join(process.cwd(), 'demo-files'));
 }
 
 function unavailable(documentId: string, fileName: string, reason: string): PreviewResponse {
@@ -41,7 +41,7 @@ function readSampleFile(name: string): { bytes: Uint8Array } | { reason: string 
   try {
     listing = fs.readdirSync(dir);
   } catch {
-    return { reason: 'No sample drive folder was found. Run: npm run seed-sample-drive -- <folder>' };
+    return { reason: 'The demo files folder was not found. Start the API from the project folder.' };
   }
   if (!listing.includes(name)) {
     return { reason: 'This seeded demo record is a catalogue entry only. There is no file behind it to preview.' };
