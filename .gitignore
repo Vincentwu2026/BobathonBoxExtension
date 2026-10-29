@@ -1,0 +1,19 @@
+# Dependencies & build output
+node_modules/
+build/
+
+# Credentials — NEVER commit
+credentials/
+*.env
+.env
+.env.*
+
+# Local index database and logs
+data/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+*.swp

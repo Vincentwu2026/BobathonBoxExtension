@@ -1,0 +1,33 @@
+{
+  "name": "box-mcp-server",
+  "version": "0.1.0",
+  "description": "Box productivity suite MCP server — file tools, indexing, and retention guard",
+  "type": "module",
+  "bin": {
+    "box-mcp-server": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "start": "node build/index.js",
+    "get-tokens": "node --loader ts-node/esm scripts/get-tokens.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "better-sqlite3": "^13.0.3",
+    "box-node-sdk": "^10.18.0",
+    "zod": "^4.6.7"
+  },
+  "overrides": {
+    "basic-ftp": "^6.2.3",
+    "get-uri": "^6.0.3",
+    "pac-proxy-agent": "^7.1.0",
+    "proxy-agent": "^6.5.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.21",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
