@@ -6,7 +6,8 @@
 
 import { BoxCrawler } from '../src/indexer/crawler.js';
 
-async function executeCrawlOnce(): Promise<void> {
+/** Returns false if the crawl could not run at all (e.g. missing credentials). */
+async function executeCrawlOnce(): Promise<boolean> {
   const startFolderId = process.env.BOX_START_FOLDER_ID || '0';
   const maxDepth = Number.parseInt(process.env.BOX_CRAWL_MAX_DEPTH || '15', 10);
   const forceReindex = process.env.BOX_FORCE_REINDEX === 'true';
@@ -34,8 +35,10 @@ async function executeCrawlOnce(): Promise<void> {
     if (stats.errors.length > 0) {
       console.error('[ScheduleCrawl] Sample Errors:', stats.errors.slice(0, 5));
     }
+    return true;
   } catch (error: any) {
     console.error(`[ScheduleCrawl] Critical error during crawl run: ${error?.message || error}`);
+    return false;
   }
 }
 
@@ -45,8 +48,8 @@ async function main() {
   const intervalMinutes = Number.parseInt(process.env.CRAWL_INTERVAL_MINUTES || '60', 10);
 
   if (runOnce) {
-    await executeCrawlOnce();
-    process.exit(0);
+    // Non-zero exit lets cron / CI see that the crawl did not run.
+    process.exit((await executeCrawlOnce()) ? 0 : 1);
   }
 
   console.error(`[ScheduleCrawl] Daemon started. Running initial crawl, then scheduling every ${intervalMinutes} minutes.`);

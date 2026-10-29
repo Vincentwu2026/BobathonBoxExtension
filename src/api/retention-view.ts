@@ -1,9 +1,9 @@
 import type { CollaboratorDTO, RetentionDTO, RetentionReasonDTO } from './dto.js';
+import { isRetentionProtected } from '../retention/rules.js';
 
 /**
  * Builds the UI retention view from evaluated inputs.
- * Rules mirror src/retention/guard.ts: protected if there is at least one active
- * collaborator OR a do_not_delete marker.
+ * The protected/unprotected decision comes from src/retention/rules.ts, shared with guard.ts.
  */
 export function buildRetention(collaborators: CollaboratorDTO[], flags: string[]): RetentionDTO {
   const reasons: RetentionReasonDTO[] = [];
@@ -19,7 +19,7 @@ export function buildRetention(collaborators: CollaboratorDTO[], flags: string[]
     });
   }
 
-  const isProtected = reasons.length > 0;
+  const isProtected = isRetentionProtected(collaborators.length, flags.length > 0);
   return {
     status: isProtected ? 'protected' : 'unprotected',
     reasons,

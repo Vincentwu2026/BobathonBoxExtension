@@ -11,8 +11,15 @@
  */
 
 import { getBoxClient } from '../box-client.js';
+import { boxDateToIso } from '../util/box-date.js';
 import { withRateLimitRetry } from '../util/rate-limiter.js';
 import { RetentionLogger } from '../retention/logger.js';
+import {
+  hasDoNotDeleteDescription,
+  isActiveCollaboratorStatus,
+  isDoNotDeleteMetadata,
+  isDoNotDeleteTag,
+} from '../retention/rules.js';
 import { ApiError, classifyBoxError } from './errors.js';
 import type { CollaboratorDTO, DeleteAttemptDTO, DocumentDTO, FolderDTO } from './dto.js';
 import { buildRetention, departmentFromPath, unverifiedRetention } from './retention-view.js';
@@ -29,17 +36,14 @@ export function assertBoxId(value: string, label: string): string {
 }
 
 function toIso(value: unknown): string | null {
-  if (!value) return null;
-  if (value instanceof Date) return value.toISOString();
-  const d = new Date(String(value));
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  return boxDateToIso(value) || null;
 }
 
 function mapCollaborators(entries: readonly any[] | undefined): CollaboratorDTO[] {
   const out: CollaboratorDTO[] = [];
   for (const c of entries ?? []) {
     const status = String(c?.status ?? 'accepted').toLowerCase();
-    if (status !== 'accepted' && status !== 'pending') continue;
+    if (!isActiveCollaboratorStatus(status)) continue;
     const who = c?.accessibleBy;
     out.push({
       name: who?.name ?? null,
@@ -63,10 +67,9 @@ async function readFlags(client: any, fileId: string, file: any): Promise<string
   const flags: string[] = [];
 
   for (const tag of Array.isArray(file?.tags) ? file.tags : []) {
-    const t = String(tag).toLowerCase();
-    if (t === 'do_not_delete' || t === 'retention_protected') flags.push(`tag:${tag}`);
+    if (isDoNotDeleteTag(String(tag))) flags.push(`tag:${tag}`);
   }
-  if (file?.description && /do_not_delete|\[protected\]/i.test(String(file.description))) {
+  if (hasDoNotDeleteDescription(file?.description ? String(file.description) : null)) {
     flags.push('description:do_not_delete');
   }
 
@@ -75,9 +78,7 @@ async function readFlags(client: any, fileId: string, file: any): Promise<string
     for (const entry of md?.entries ?? []) {
       const raw = entry?.rawData ?? entry;
       for (const [key, val] of Object.entries(raw ?? {})) {
-        const k = key.toLowerCase();
-        const v = String(val).toLowerCase();
-        if (k === 'do_not_delete' || k === 'retention' || v === 'do_not_delete' || v === 'protected') {
+        if (isDoNotDeleteMetadata(key, val)) {
           flags.push(`metadata:${key}`);
         }
       }

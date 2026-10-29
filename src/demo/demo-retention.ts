@@ -15,8 +15,7 @@
 import { z } from 'zod';
 import { getFileRecord } from '../indexer/schema.js';
 import { formatError, formatSuccess } from '../tools/box-file-tools.js';
-
-const DO_NOT_DELETE_PATTERN = /do_not_delete|\[protected\]/i;
+import { hasDoNotDeleteDescription, isRetentionProtected } from '../retention/rules.js';
 
 export const demoRetentionCheckSchema = {
   fileId: z
@@ -52,7 +51,7 @@ export function evaluateDemoRetention(fileId: string): DemoRetentionResult | nul
     .split(',')
     .map((c) => c.trim())
     .filter((c) => c.length > 0);
-  const hasDoNotDeleteFlag = DO_NOT_DELETE_PATTERN.test(record.content_preview || '');
+  const hasDoNotDeleteFlag = hasDoNotDeleteDescription(record.content_preview);
 
   const reasons: string[] = [];
   const howToUnblock: string[] = [];
@@ -66,7 +65,7 @@ export function evaluateDemoRetention(fileId: string): DemoRetentionResult | nul
     howToUnblock.push('Remove all collaborators from the file');
   }
 
-  const isProtected = reasons.length > 0;
+  const isProtected = isRetentionProtected(activeCollaborators.length, hasDoNotDeleteFlag);
   const explanation = isProtected
     ? `Deletion would be BLOCKED. ${reasons.join('. ')}.`
     : 'Deletion would be PERMITTED. File has no active collaborators and no do_not_delete marker.';

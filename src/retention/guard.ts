@@ -1,6 +1,13 @@
 import { getBoxClient } from '../box-client.js';
 import { withRateLimitRetry } from '../util/rate-limiter.js';
 import { RetentionLogger } from './logger.js';
+import {
+  hasDoNotDeleteDescription,
+  isActiveCollaboratorStatus,
+  isDoNotDeleteMetadata,
+  isDoNotDeleteTag,
+  isRetentionProtected,
+} from './rules.js';
 
 export interface ActiveCollaborator {
   id: string;
@@ -66,14 +73,14 @@ export async function checkRetention(fileId: string): Promise<RetentionCheckResu
     if (file.tags && Array.isArray(file.tags)) {
       for (const tag of file.tags) {
         metadataFlags.push(tag);
-        if (tag.toLowerCase() === 'do_not_delete' || tag.toLowerCase() === 'retention_protected') {
+        if (isDoNotDeleteTag(tag)) {
           hasDoNotDeleteFlag = true;
         }
       }
     }
 
     // Check description for do_not_delete annotations
-    if (file.description && /do_not_delete|\[protected\]/i.test(file.description)) {
+    if (hasDoNotDeleteDescription(file.description)) {
       hasDoNotDeleteFlag = true;
       metadataFlags.push('description:do_not_delete');
     }
@@ -93,12 +100,7 @@ export async function checkRetention(fileId: string): Promise<RetentionCheckResu
       for (const md of metadataResp.entries) {
         const raw = (md as any).rawData || md;
         for (const [key, val] of Object.entries(raw)) {
-          if (
-            key.toLowerCase() === 'do_not_delete' ||
-            key.toLowerCase() === 'retention' ||
-            String(val).toLowerCase() === 'do_not_delete' ||
-            String(val).toLowerCase() === 'protected'
-          ) {
+          if (isDoNotDeleteMetadata(key, val)) {
             hasDoNotDeleteFlag = true;
             metadataFlags.push(`metadata:${key}=${val}`);
           }
@@ -121,7 +123,7 @@ export async function checkRetention(fileId: string): Promise<RetentionCheckResu
       for (const collab of collabResp.entries) {
         const status = (collab.status || 'accepted').toLowerCase();
         // Considered active if accepted or pending invitation
-        if (status === 'accepted' || status === 'pending') {
+        if (isActiveCollaboratorStatus(status)) {
           const user = collab.accessibleBy;
           const userEmail = user && 'login' in user ? (user as any).login : 'group@box.enterprise';
           activeCollaborators.push({
@@ -139,16 +141,14 @@ export async function checkRetention(fileId: string): Promise<RetentionCheckResu
   }
 
   // Evaluate retention protection logic
-  let isProtected = false;
+  const isProtected = isRetentionProtected(activeCollaborators.length, hasDoNotDeleteFlag);
   const reasons: string[] = [];
 
   if (hasDoNotDeleteFlag) {
-    isProtected = true;
     reasons.push(`File is tagged with explicit retention policy (${metadataFlags.join(', ')})`);
   }
 
   if (activeCollaborators.length > 0) {
-    isProtected = true;
     const collabSummary = activeCollaborators.map((c) => `${c.name} (${c.email}, ${c.role})`).join('; ');
     reasons.push(`File has ${activeCollaborators.length} active collaborator(s): ${collabSummary}`);
   }
